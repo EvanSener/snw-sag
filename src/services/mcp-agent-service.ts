@@ -265,8 +265,7 @@ export class McpAgentService {
       const args = {
         query: input.userContent,
         strategy: "multi",
-        returnTrace: true,
-        topK: 5
+        returnTrace: true
       };
       input.emit?.({ type: "tool_start", toolName: "sag_search", arguments: args });
       const call = await this.callToolAndPersist(input.runner, input.session.id, "sag_search", args, input.messageId, input.signal, input.emit);

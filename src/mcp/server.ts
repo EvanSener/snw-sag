@@ -21,7 +21,12 @@ export function buildMcpServer(): McpServer {
       content: z.string().min(1),
       metadata: z.record(z.unknown()).optional(),
       extract: z.boolean().optional(),
-      waitForCompletion: z.boolean().optional()
+      waitForCompletion: z.boolean().optional(),
+      chunking: z.object({
+        mode: z.enum(["heading_strict", "token"]).optional(),
+        maxTokens: z.number().int().min(64).max(8192).optional(),
+        overlapTokens: z.number().int().min(0).max(4096).optional()
+      }).optional()
     },
     async (input, extra) => {
       const notificationEmitter = createMcpNotificationEmitter(extra);

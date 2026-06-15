@@ -2,6 +2,8 @@ import { aiSettingsService, type AiRuntimeSettings } from "../services/ai-settin
 import type { ExtractedEntity, ExtractedEvent, EventRecord } from "../types.js";
 import { createModelCallLogger } from "../observability/model-call-log.js";
 
+type ChatMessage = { role: "system" | "user" | "assistant"; content: string };
+
 export interface LlmClient {
   extractNamedEntities(query: string): Promise<string[]>;
   extractEventsFromChunk(input: {
@@ -59,39 +61,8 @@ export class OpenAICompatibleLlmClient implements LlmClient {
       return events;
     }
     const result = await this.chatJson(settings, {
-      system: buildSag2ExtractionSystemPrompt(),
-      user: JSON.stringify({
-        type: "request",
-        data: {
-          items: [{
-            id: 1,
-            content: [
-              input.heading ? `# ${input.heading}` : "",
-              input.content
-            ].filter(Boolean).join("\n\n")
-          }],
-          meta: {
-            source_type: "article",
-            source_title: input.title,
-            source_summary: "",
-            previous_context: "",
-            entity_types: [
-              { type: "person", description: "人物、作者、用户、负责人等具体个人" },
-              { type: "organization", description: "公司、机构、团体、政府部门、学校、团队等组织" },
-              { type: "location", description: "地点、地域、国家、城市、场所、地址" },
-              { type: "time", description: "日期、年份、时期、时间表达" },
-              { type: "product", description: "产品、系统、平台、模型、软件、服务、数据库" },
-              { type: "metric", description: "数字、指标、金额、比例、数量、评分、性能数据" },
-              { type: "action", description: "动作、行为、流程、操作、状态变化" },
-              { type: "work", description: "作品、文档、论文、项目、任务、计划" },
-              { type: "group", description: "人群、角色群体、职业群体、用户群体" },
-              { type: "subject", description: "主题、概念、领域、技术、专业术语、事件名称" },
-              { type: "tags", description: "其他类型均不匹配时使用的标签实体" }
-            ],
-            output_language: "必须与输入正文的主要语言一致；中文输入输出中文，英文输入输出英文，不要翻译专有名词之外的内容。"
-          }
-        }
-      })
+      operation: "extractEventsFromChunk.benchmarkPipeline",
+      messages: buildBenchmarkExtractionMessages(input)
     });
     const items = Array.isArray(result.items) ? result.items : result.data?.items;
     if (!Array.isArray(items) || items.length === 0) {
@@ -137,14 +108,20 @@ export class OpenAICompatibleLlmClient implements LlmClient {
       : localRerank(input.query, input.candidates, input.topK);
   }
 
-  private async chatJson(settings: AiRuntimeSettings, input: { system: string; user: string }): Promise<Record<string, any>> {
+  private async chatJson(settings: AiRuntimeSettings, input: {
+    system?: string;
+    user?: string;
+    messages?: ChatMessage[];
+    operation?: string;
+  }): Promise<Record<string, any>> {
     const url = `${settings.llmBaseUrl.replace(/\/$/, "")}/chat/completions`;
+    const messages = input.messages ?? [
+      { role: "system" as const, content: input.system ?? "" },
+      { role: "user" as const, content: input.user ?? "" }
+    ];
     const body = {
       model: settings.llmModel,
-      messages: [
-        { role: "system", content: input.system },
-        { role: "user", content: input.user }
-      ],
+      messages,
       response_format: { type: "json_object" },
       temperature: 0.1
     };
@@ -156,7 +133,7 @@ export class OpenAICompatibleLlmClient implements LlmClient {
       const timeout = setTimeout(() => controller.abort(), settings.llmTimeoutMs);
       const log = createModelCallLogger({
         kind: "llm",
-        operation: "chatJson",
+        operation: input.operation ?? "chatJson",
         request: {
           url,
           method: "POST",
@@ -262,6 +239,238 @@ function isRetryableFetchError(error: unknown): boolean {
 async function waitBeforeRetry(attempt: number): Promise<void> {
   const delayMs = Math.min(1_000, 100 * 2 ** Math.max(0, attempt - 1));
   await new Promise((resolve) => setTimeout(resolve, delayMs));
+}
+
+function buildBenchmarkExtractionMessages(input: {
+  title: string;
+  heading?: string;
+  content: string;
+  references: string[];
+}): ChatMessage[] {
+  const userInput = {
+    type: "request",
+    data: {
+      items: [{
+        id: 1,
+        content: [
+          input.heading ? `# ${input.heading}` : "",
+          input.content
+        ].filter(Boolean).join("\n\n")
+      }],
+      meta: {
+        source_type: "article",
+        source_title: input.title,
+        source_summary: "",
+        previous_context: "",
+        related_events: [],
+        entity_types: benchmarkEntityTypes(),
+        output_language: "Use the same main language as the input text. Chinese input must produce Chinese fields; English input must produce English fields."
+      }
+    },
+    output_schema: benchmarkExtractionSchema()
+  };
+  return [
+    { role: "system", content: buildBenchmarkExtractionSystemPrompt() },
+    { role: "user", content: JSON.stringify(benchmarkExtractionExampleInput()) },
+    { role: "assistant", content: JSON.stringify(benchmarkExtractionExampleOutput()) },
+    { role: "user", content: JSON.stringify(userInput) }
+  ];
+}
+
+function benchmarkEntityTypes() {
+  return [
+    { type: "person", description: "人物、作者、用户、负责人等具体个人" },
+    { type: "organization", description: "公司、机构、团体、政府部门、学校、团队等组织" },
+    { type: "location", description: "地点、地域、国家、城市、场所、地址" },
+    { type: "time", description: "日期、年份、时期、时间表达" },
+    { type: "product", description: "产品、系统、平台、模型、软件、服务、数据库" },
+    { type: "metric", description: "数字、指标、金额、比例、数量、评分、性能数据" },
+    { type: "action", description: "动作、行为、流程、操作、状态变化" },
+    { type: "work", description: "作品、文档、论文、项目、任务、计划" },
+    { type: "group", description: "人群、角色群体、职业群体、用户群体" },
+    { type: "subject", description: "主题、概念、领域、技术、专业术语、事件名称" },
+    { type: "tags", description: "其他类型均不匹配时使用的标签实体" }
+  ];
+}
+
+function benchmarkExtractionExampleInput() {
+  return {
+    type: "request",
+    data: {
+      items: [{
+        id: 1,
+        content: "# SAG 检索\n\nSAG 将文档切成 chunk，抽取单个融合事项和实体，再通过 entity-event 关系进行多跳检索。"
+      }],
+      meta: {
+        source_type: "article",
+        source_title: "SAG 说明",
+        source_summary: "",
+        previous_context: "",
+        related_events: [],
+        entity_types: benchmarkEntityTypes()
+      }
+    },
+    output_schema: benchmarkExtractionSchema()
+  };
+}
+
+function benchmarkExtractionExampleOutput() {
+  return {
+    type: "response",
+    data: {
+      items: [{
+        title: "SAG 文档入库与多跳检索流程",
+        summary: "SAG 通过 chunk、融合事项、实体和 entity-event 关系组织文档，以支持多跳检索。",
+        content: "SAG 将文档切分为 chunk，并从每个 chunk 中抽取单个融合事项和关键实体，再利用 entity-event 关系进行多跳检索。",
+        category: "检索流程",
+        keywords: ["SAG", "chunk", "融合事项", "实体", "多跳检索"],
+        priority: "UNKNOWN",
+        status: "COMPLETED",
+        references: [1],
+        entities: [
+          { type: "product", name: "SAG", description: "执行文档入库和多跳检索的系统" },
+          { type: "subject", name: "chunk", description: "SAG 文档入库时形成的原文切片" },
+          { type: "subject", name: "entity-event 关系", description: "SAG 多跳检索依赖的事项与实体连接关系" }
+        ],
+        is_valid: true,
+        children: []
+      }],
+      meta: {
+        reason: "识别出一个围绕 SAG 入库与检索的统一主题；覆盖 id1 的 chunk、事项、实体和多跳检索信息；无孤立有效片段。",
+        confidence: 0.9
+      }
+    }
+  };
+}
+
+function benchmarkExtractionSchema() {
+  return {
+    type: "object",
+    required: ["type", "data"],
+    properties: {
+      type: { const: "response" },
+      data: {
+        type: "object",
+        required: ["items", "meta"],
+        properties: {
+          items: {
+            type: "array",
+            minItems: 0,
+            maxItems: 1,
+            items: {
+              type: "object",
+              required: ["title", "summary", "content", "category", "keywords", "references", "entities", "is_valid"],
+              properties: {
+                title: { type: "string" },
+                summary: { type: "string" },
+                content: { type: "string" },
+                category: { type: "string" },
+                keywords: { type: "array", items: { type: "string" } },
+                priority: { enum: ["HIGH", "MEDIUM", "LOW", "UNKNOWN"] },
+                status: { enum: ["COMPLETED", "PROCESSING", "PENDING", "UNKNOWN"] },
+                references: { type: "array", items: { type: "integer" } },
+                entities: {
+                  type: "array",
+                  items: {
+                    type: "object",
+                    required: ["type", "name", "description"],
+                    properties: {
+                      type: { enum: benchmarkEntityTypes().map((entityType) => entityType.type) },
+                      name: { type: "string" },
+                      description: { type: "string" }
+                    }
+                  }
+                },
+                is_valid: { type: "boolean" },
+                children: { type: "array", maxItems: 0 }
+              }
+            }
+          },
+          meta: {
+            type: "object",
+            required: ["reason"],
+            properties: {
+              reason: { type: "string" },
+              confidence: { type: "number" }
+            }
+          }
+        }
+      }
+    }
+  };
+}
+
+function buildBenchmarkExtractionSystemPrompt(): string {
+  const now = new Date().toISOString();
+  return `
+## Role
+
+You are a professional SAG content extractor. Extract exactly two structured objects from raw documents: events and entities.
+
+## Benchmark-aligned Event Principles
+
+- Mandatory single event: all valid fragments in the input must be fused into one comprehensive top-level event. Do not split different topics into multiple top-level events.
+- Global scan first: identify time, location, subject, action, object, data, evaluation, cause/effect, comparison, and relationship units before writing the event.
+- Cross-fragment association: resolve subject continuity, temporal continuity, causal/progressive links, contrasts, aliases, and references.
+- Information coverage: every valid information unit must be represented in the single event or explicitly treated as noise in data.meta.reason.
+- Faithfulness: do not invent facts, omit core facts, change the subject, or mechanically copy long original text.
+- Panoramic integration: the event content should be an organic narrative thread, not a bullet list.
+- Preserve relative time expressions unless the source already gives exact dates.
+
+## Entity Principles
+
+- Extract the entities required to understand the event, especially subjects, actions/predicates, objects, products, systems, models, metrics, organizations, people, locations, dates, and key concepts.
+- Split coordinated entities such as "A and B" into separate entities.
+- Use only the provided entity_types. Prefer specific types; use tags only when no specific type fits.
+- Each entity.description must explain that entity's concrete role or relationship in the event.
+
+## Input Contract
+
+The user message is JSON:
+- type: "request"
+- data.items: content fragments, each with 1-based id and content
+- data.meta.source_type, source_title, source_summary, previous_context, related_events, entity_types
+- output_schema: JSON schema for the response
+
+Current time: ${now}
+
+## Output Contract
+
+Return JSON only. Do not wrap it in markdown.
+The response must be:
+{
+  "type": "response",
+  "data": {
+    "items": [
+      {
+        "title": "...",
+        "summary": "...",
+        "content": "...",
+        "category": "...",
+        "keywords": ["..."],
+        "priority": "HIGH|MEDIUM|LOW|UNKNOWN",
+        "status": "COMPLETED|PROCESSING|PENDING|UNKNOWN",
+        "references": [1],
+        "entities": [{ "type": "...", "name": "...", "description": "..." }],
+        "is_valid": true,
+        "children": []
+      }
+    ],
+    "meta": {
+      "reason": "...",
+      "confidence": 0.9
+    }
+  }
+}
+
+## Strict Rules
+
+- data.items must contain exactly one valid event unless the input has no useful factual content.
+- children must be an empty array.
+- references must cite all valid fragments used by the fused event and no unrelated fragments.
+- meta.reason must state the topic identification logic, cross-fragment association evidence, semantic restructuring choices, coverage status, and noise handling.
+- Output language must follow the main input language. Chinese input requires Chinese title, summary, content, category, entity descriptions, and reason.
+`.trim();
 }
 
 function normalizeEntities(raw: unknown, inputIsChinese: boolean): ExtractedEntity[] {
@@ -416,98 +625,6 @@ function uniqueEntities(entities: ExtractedEntity[]): ExtractedEntity[] {
     result.push(entity);
   }
   return result;
-}
-
-function buildSag2ExtractionSystemPrompt(): string {
-  return `
-## Role
-
-你是专业的内容提取器，核心任务是从原始文档中提取「事项」和「实体」两类结构化信息，用于构建事项中心知识图谱。
-
-事项提取：按语义单元组织内容，确保每个事项独立可读、语义完整，严格忠于原文事实，不增删核心信息，不篡改原文逻辑。事项正文必须是概括性提取，不是原文复写。
-
-实体提取：聚焦事项核心语义，提取构建知识图谱所需的关键实体。需要覆盖主语实体、谓语/动作实体、宾语实体，以及人物、组织、地点、时间、产品、系统、模型、指标、项目、专业术语等关键对象。若标题包含关键实体，也必须从标题中提取。
-
-## Task
-
-1. 理解输入内容中的标题、正文和元信息。
-2. 过滤噪音内容；如果正文完全无有效信息，可返回空 items。
-3. 提取事项：
-   - 必须把当前输入片段综合成一个顶级事项，data.items 必须且只能包含一个事项对象。
-   - 即使当前片段包含多个主题、多个子话题或多个产品，也必须融合为一个完整事项，不允许拆成多个事项。
-   - 事项必须有标题、摘要、精炼正文、引用片段索引。
-   - 正文要覆盖当前片段的核心事实，保持独立可读，但必须压缩概括，不要复制长段原文。
-   - 中文正文控制在 1-3 句、约 80-180 个汉字；英文正文控制在 1-3 sentences、约 60-120 words。
-4. 提取实体：
-   - 从 meta.entity_types 中选择最贴切类型，不允许自定义类型。
-   - 优先使用具体类型，tags 只在其他类型不匹配时使用。
-   - 并列实体必须拆开，例如“甲和乙”应提取为两个实体。
-   - description 必须说明实体在当前事项中的具体作用、角色或关系。
-5. 输出 JSON。
-
-## Language Rules
-
-- 输出语言必须保持输入正文的主要语言。
-- 中文正文：title、summary、content、category、keywords、entities.description、meta.reason 都使用中文。
-- 英文正文：保持英文输出。
-- 不要把中文文档提取成英文；不要把英文文档翻译成中文。
-- 专有名词、产品名、模型名、缩写可保留原文。
-
-## Input
-
-输入为 JSON：
-- type: "request"
-- data.items: 内容片段数组，每个包含 id 和 content，id 为 1-based 引用编号。
-- data.meta.source_type: "article"
-- data.meta.source_title: 文档标题
-- data.meta.source_summary: 文档摘要，可为空
-- data.meta.previous_context: 前文上下文，可为空
-- data.meta.entity_types: 可用实体类型数组
-
-## Output
-
-只返回 JSON，不要 Markdown 代码块，不要解释文字。
-
-输出格式：
-{
-  "type": "response",
-  "data": {
-    "items": [
-      {
-        "title": "事项标题",
-        "summary": "一句话摘要",
-        "content": "独立可读、精炼概括且忠于原文事实的事项内容",
-        "category": "事项分类",
-        "keywords": ["5-10个核心关键词"],
-        "priority": "HIGH|MEDIUM|LOW|UNKNOWN",
-        "status": "COMPLETED|PROCESSING|PENDING|UNKNOWN",
-        "references": [1],
-        "entities": [
-          { "type": "entity_types中的类型", "name": "实体名称", "description": "实体在事项中的作用" }
-        ],
-        "is_valid": true,
-        "children": []
-      }
-    ],
-    "meta": {
-      "reason": "简要说明提取和过滤依据",
-      "confidence": 0.9
-    }
-  }
-}
-
-## Rules
-
-- data.items 必须且只能包含一个事项对象；除非正文完全无有效信息，否则不要返回空 items。
-- 不允许返回多个顶级事项；不允许把不同主题拆成多个事项。
-- children 必须为空数组；所有核心信息、关键词和实体都合并到唯一事项中。
-- 唯一事项必须忠于原文，不添加、不臆测，但必须概括表达，不要把 chunk 原文整段搬进 content。
-- references 必须使用输入 items 的 1-based id，且覆盖事项对应的所有片段。
-- keywords 必须包含专有名词、缩写、人名、组织、产品、系统、技术或关键数据。
-- 对于中文正文，避免输出英文 category 或英文 description。
-- 如果实体名称有全称、简称、别称，原文中出现的表达都可以提取。
-- 字符串里的英文双引号必须转义，保证 JSON 可解析。
-`.trim();
 }
 
 function localExtractEvent(input: {

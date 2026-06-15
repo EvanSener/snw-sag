@@ -12,7 +12,12 @@ const runtimeSettings = vi.hoisted(() => ({
     llmApiKey: "",
     hasRemoteLlm: false,
     llmTimeoutMs: 60_000,
-    llmMaxRetries: 2
+    llmMaxRetries: 2,
+    defaultSearchMode: "fast" as const,
+    defaultSearchTopK: 10,
+    defaultChunkingMode: "heading_strict" as const,
+    chunkTokenLimit: 512,
+    chunkOverlapTokens: 100
   }
 }));
 
@@ -37,7 +42,12 @@ describe("local LLM fallback", () => {
       llmApiKey: "",
       hasRemoteLlm: false,
       llmTimeoutMs: 60_000,
-      llmMaxRetries: 2
+      llmMaxRetries: 2,
+      defaultSearchMode: "fast" as const,
+      defaultSearchTopK: 10,
+      defaultChunkingMode: "heading_strict" as const,
+      chunkTokenLimit: 512,
+      chunkOverlapTokens: 100
     };
   });
 

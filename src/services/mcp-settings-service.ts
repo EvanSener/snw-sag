@@ -53,7 +53,6 @@ export function getPublicMcpSettings(): PublicMcpSettings {
           query: "SAG 为什么比传统 RAG 更适合多跳检索？",
           strategy: "multi",
           searchMode: "fast",
-          topK: 5,
           returnTrace: true
         }
       },
@@ -68,8 +67,7 @@ export function getPublicMcpSettings(): PublicMcpSettings {
         }, ["query"]),
         example: {
           query: "解释 SAG 检索为什么召回这些事件",
-          searchMode: "standard",
-          topK: 5
+          searchMode: "standard"
         }
       },
       {

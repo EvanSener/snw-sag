@@ -22,7 +22,7 @@ import {
   updateSource
 } from "../db/repositories.js";
 import { ingestionService } from "./ingestion-service.js";
-import type { IngestProgressStage, IngestProgressUpdate } from "../types.js";
+import type { ChunkingMode, IngestProgressStage, IngestProgressUpdate } from "../types.js";
 
 const MAX_UPLOAD_BYTES = 5 * 1024 * 1024;
 const ALLOWED_EXTENSIONS = new Set([".md", ".txt"]);
@@ -134,6 +134,11 @@ export class WebuiService {
     content: string;
     sourceId?: string;
     extract?: boolean;
+    chunking?: {
+      mode?: ChunkingMode;
+      maxTokens?: number;
+      overlapTokens?: number;
+    };
   }, tenantId = config.DEFAULT_TENANT_ID) {
     const fileName = input.fileName.trim();
     const extension = fileName.includes(".") ? fileName.slice(fileName.lastIndexOf(".")).toLowerCase() : "";
@@ -156,6 +161,7 @@ export class WebuiService {
       title,
       content: input.content,
       extract: input.extract ?? true,
+      chunking: input.chunking,
       metadata: {
         fileName,
         uploadedVia: "webui",
@@ -178,6 +184,11 @@ export class WebuiService {
     content: string;
     sourceId?: string;
     extract?: boolean;
+    chunking?: {
+      mode?: ChunkingMode;
+      maxTokens?: number;
+      overlapTokens?: number;
+    };
   }, tenantId = config.DEFAULT_TENANT_ID) {
     const upload = validateUploadInput(input);
     const now = new Date().toISOString();
@@ -197,7 +208,8 @@ export class WebuiService {
     queueMicrotask(() => {
       void this.runUploadJob(job.id, {
         ...upload,
-        extract: input.extract
+        extract: input.extract,
+        chunking: input.chunking
       }, tenantId);
     });
     return job;
@@ -213,6 +225,11 @@ export class WebuiService {
     content: string;
     sourceId: string;
     extract?: boolean;
+    chunking?: {
+      mode?: ChunkingMode;
+      maxTokens?: number;
+      overlapTokens?: number;
+    };
     uploadBytes: number;
   }, tenantId: string) {
     this.updateUploadJob(jobId, {
@@ -227,6 +244,7 @@ export class WebuiService {
         title: input.title,
         content: input.content,
         extract: input.extract ?? true,
+        chunking: input.chunking,
         metadata: {
           fileName: input.fileName,
           uploadedVia: "webui",

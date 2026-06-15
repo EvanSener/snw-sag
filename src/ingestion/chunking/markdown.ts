@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { encode } from "gpt-tokenizer/encoding/cl100k_base";
+import { decode, encode } from "gpt-tokenizer/encoding/cl100k_base";
+import type { ChunkingMode } from "../../types.js";
 
 export interface SectionDraft {
   id: string;
@@ -24,45 +25,143 @@ export interface ChunkingResult {
   chunks: ChunkDraft[];
 }
 
-export function chunkMarkdown(content: string, options: { maxTokens?: number } = {}): ChunkingResult {
-  const maxTokens = options.maxTokens ?? 512;
-  const originalSections = buildSections(content);
+export interface ChunkMarkdownOptions {
+  mode?: ChunkingMode;
+  maxTokens?: number;
+  overlapTokens?: number;
+}
+
+export function chunkMarkdown(content: string, options: ChunkMarkdownOptions = {}): ChunkingResult {
+  const mode = options.mode ?? (options.maxTokens == null && options.overlapTokens == null ? "heading_strict" : "token");
+  if (mode === "heading_strict") {
+    const sections = buildHeadingStrictSections(content);
+    return {
+      sections,
+      chunks: sections.map((section, index) => buildChunk([section], index))
+    };
+  }
+  const sections = buildTokenWindowSections(content, options);
+  return {
+    sections,
+    chunks: sections.map((section, index) => buildChunk([section], index))
+  };
+}
+
+function buildHeadingStrictSections(content: string): SectionDraft[] {
+  const lines = content.replace(/\r\n/g, "\n").split("\n");
   const sections: SectionDraft[] = [];
-  const chunks: ChunkDraft[] = [];
-  let current: SectionDraft[] = [];
-  let currentTokens = 0;
+  let headings: Array<{ level: number; title: string; line: string }> = [];
+  let contentLines: string[] = [];
 
-  for (const section of originalSections) {
-    if (section.tokenCount > maxTokens) {
-      if (current.length > 0) {
-        chunks.push(buildChunk(current, chunks.length));
-        current = [];
-        currentTokens = 0;
-      }
-      for (const split of splitLargeSection(section, maxTokens)) {
-        sections.push(split);
-        chunks.push(buildChunk([split], chunks.length));
+  function flush(): void {
+    if (headings.length === 0 && contentLines.every((line) => !line.trim())) {
+      contentLines = [];
+      return;
+    }
+    const headingContent = headings.map((heading) => heading.line).join("\n");
+    const body = contentLines.join("\n").trim();
+    const rawContent = [headingContent, body].filter(Boolean).join("\n").trim();
+    if (!rawContent) {
+      headings = [];
+      contentLines = [];
+      return;
+    }
+    const mainHeading = headings.length > 0
+      ? headings.reduce((best, heading) => heading.level < best.level ? heading : best, headings[0]).title
+      : "Introduction";
+    sections.push({
+      id: randomUUID(),
+      orderIndex: sections.length,
+      heading: mainHeading,
+      content: stripMarkdown(rawContent),
+      rawContent,
+      tokenCount: estimateTokens(rawContent)
+    });
+    headings = [];
+    contentLines = [];
+  }
+
+  for (const line of lines) {
+    const headingMatch = line.match(/^(#{1,6})\s+(.+)$/);
+    if (headingMatch) {
+      flush();
+      headings = [{
+        level: headingMatch[1].length,
+        title: headingMatch[2].trim(),
+        line
+      }];
+      continue;
+    }
+    contentLines.push(line);
+  }
+  flush();
+
+  if (sections.length === 0 && content.trim()) {
+    const rawContent = content.trim();
+    sections.push({
+      id: randomUUID(),
+      orderIndex: 0,
+      heading: "Introduction",
+      content: stripMarkdown(rawContent),
+      rawContent,
+      tokenCount: estimateTokens(rawContent)
+    });
+  }
+  return sections;
+}
+
+function buildTokenWindowSections(content: string, options: ChunkMarkdownOptions): SectionDraft[] {
+  const maxTokens = normalizeTokenCount(options.maxTokens ?? 512, 64, 8192);
+  const overlapTokens = normalizeTokenCount(options.overlapTokens ?? 100, 0, maxTokens - 1);
+  const tokenIds = encode(content);
+  if (tokenIds.length === 0) {
+    return [];
+  }
+  const stride = Math.max(1, maxTokens - overlapTokens);
+  const sections: SectionDraft[] = [];
+  for (let start = 0; start < tokenIds.length; start += stride) {
+    let end = Math.min(start + maxTokens, tokenIds.length);
+    let rawContent = decode(tokenIds.slice(start, end)).trim();
+    while (estimateTokens(rawContent) > maxTokens && end > start + 1) {
+      end -= 1;
+      rawContent = decode(tokenIds.slice(start, end)).trim();
+    }
+    if (!rawContent) {
+      if (end >= tokenIds.length) {
+        break;
       }
       continue;
     }
-
-    sections.push(section);
-    if (current.length === 0 || currentTokens + section.tokenCount <= maxTokens) {
-      current.push(section);
-      currentTokens += section.tokenCount;
-      continue;
+    sections.push({
+      id: randomUUID(),
+      orderIndex: sections.length,
+      heading: extractFirstHeading(rawContent) ?? "Introduction",
+      content: stripMarkdown(rawContent),
+      rawContent,
+      tokenCount: estimateTokens(rawContent)
+    });
+    if (end >= tokenIds.length) {
+      break;
     }
-
-    chunks.push(buildChunk(current, chunks.length));
-    current = [section];
-    currentTokens = section.tokenCount;
   }
+  return sections;
+}
 
-  if (current.length > 0) {
-    chunks.push(buildChunk(current, chunks.length));
+function normalizeTokenCount(value: number, min: number, max: number): number {
+  if (!Number.isFinite(value)) {
+    return min;
   }
+  return Math.max(min, Math.min(Math.trunc(value), max));
+}
 
-  return { sections, chunks };
+function extractFirstHeading(text: string): string | null {
+  for (const line of text.split("\n")) {
+    const headingMatch = line.match(/^(#{1,6})\s+(.+)$/);
+    if (headingMatch) {
+      return headingMatch[2].trim();
+    }
+  }
+  return null;
 }
 
 function buildSections(content: string): SectionDraft[] {

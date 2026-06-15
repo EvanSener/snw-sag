@@ -1,6 +1,7 @@
 export type SearchStrategy = "vector" | "multi";
 export type SearchMode = "standard" | "fast";
 export type MultiSubStrategy = "multi" | "multi1" | "hopllm";
+export type ChunkingMode = "heading_strict" | "token";
 
 export interface SearchInput {
   query: string;
@@ -121,6 +122,11 @@ export interface IngestDocumentInput {
   metadata?: Record<string, unknown>;
   extract?: boolean;
   waitForCompletion?: boolean;
+  chunking?: {
+    mode?: ChunkingMode;
+    maxTokens?: number;
+    overlapTokens?: number;
+  };
 }
 
 export interface IngestDocumentResult {
@@ -330,5 +336,9 @@ export interface PublicAiProviderSettings {
   llmTimeoutMs: number;
   llmMaxRetries: number;
   defaultSearchMode: SearchMode;
+  defaultSearchTopK: number;
+  defaultChunkingMode: ChunkingMode;
+  chunkTokenLimit: number;
+  chunkOverlapTokens: number;
   updatedAt: string;
 }

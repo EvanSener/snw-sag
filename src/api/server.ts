@@ -24,7 +24,12 @@ const ingestSchema = z.object({
   content: z.string().min(1),
   metadata: z.record(z.unknown()).optional(),
   extract: z.boolean().optional(),
-  waitForCompletion: z.boolean().optional()
+  waitForCompletion: z.boolean().optional(),
+  chunking: z.object({
+    mode: z.enum(["heading_strict", "token"]).optional(),
+    maxTokens: z.number().int().min(64).max(8192).optional(),
+    overlapTokens: z.number().int().min(0).max(4096).optional()
+  }).optional()
 });
 
 const searchSchema = z.object({
@@ -55,7 +60,12 @@ const uploadSchema = z.object({
   title: z.string().min(1).optional(),
   fileName: z.string().min(1),
   content: z.string(),
-  extract: z.boolean().optional()
+  extract: z.boolean().optional(),
+  chunking: z.object({
+    mode: z.enum(["heading_strict", "token"]).optional(),
+    maxTokens: z.number().int().min(64).max(8192).optional(),
+    overlapTokens: z.number().int().min(0).max(4096).optional()
+  }).optional()
 });
 
 const projectSchema = z.object({
@@ -93,7 +103,11 @@ const aiSettingsSchema = z.object({
   clearLlmApiKey: z.boolean().optional(),
   llmTimeoutMs: z.number().int().positive(),
   llmMaxRetries: z.number().int().min(0).max(10),
-  defaultSearchMode: z.enum(["standard", "fast"]).default("fast")
+  defaultSearchMode: z.enum(["standard", "fast"]).default("fast"),
+  defaultSearchTopK: z.number().int().min(1).max(50).default(10),
+  defaultChunkingMode: z.enum(["heading_strict", "token"]).default("heading_strict"),
+  chunkTokenLimit: z.number().int().min(64).max(8192).default(512),
+  chunkOverlapTokens: z.number().int().min(0).max(4096).default(100)
 });
 
 export function buildHttpServer() {

@@ -9,6 +9,7 @@ import { chunkMarkdown, type ChunkDraft } from "../ingestion/chunking/markdown.j
 import { extractEventsFromChunk } from "../ingestion/extract/extractor.js";
 import type { ExtractedEntity, ExtractedEvent, IngestDocumentInput, IngestDocumentResult, IngestProgressUpdate } from "../types.js";
 import { logger } from "../observability/logger.js";
+import { aiSettingsService } from "./ai-settings-service.js";
 
 type ExtractedChunkEvents = {
   chunk: ChunkDraft;
@@ -61,6 +62,12 @@ export class IngestionService {
     const documentId = randomUUID();
     const extract = input.extract ?? true;
     const ingestConcurrency = config.INGEST_CONCURRENCY;
+    const runtimeSettings = await aiSettingsService.getRuntimeSettings();
+    const chunkingOptions = {
+      mode: input.chunking?.mode ?? runtimeSettings.defaultChunkingMode,
+      maxTokens: input.chunking?.maxTokens ?? runtimeSettings.chunkTokenLimit,
+      overlapTokens: input.chunking?.overlapTokens ?? runtimeSettings.chunkOverlapTokens
+    };
 
     onProgress?.({
       stage: "PARSING",
@@ -72,10 +79,10 @@ export class IngestionService {
       tenantId,
       name: input.title,
       description: "Created by SAG ingestDocument",
-      metadata: { ...(input.metadata ?? {}), traceId }
+      metadata: { ...(input.metadata ?? {}), traceId, chunking: chunkingOptions }
     });
 
-    const chunking = chunkMarkdown(input.content);
+    const chunking = chunkMarkdown(input.content, chunkingOptions);
     onProgress?.({
       stage: "CHUNKING",
       message: `已生成 ${chunking.chunks.length} 个切片`,
@@ -110,7 +117,7 @@ export class IngestionService {
           insert into documents (id, source_id, title, content, status, parse_status, metadata)
           values ($1, $2, $3, $4, 'PARSING', 'PARSING', $5::jsonb)
         `,
-        [documentId, source.id, input.title, input.content, JSON.stringify(input.metadata ?? {})]
+        [documentId, source.id, input.title, input.content, JSON.stringify({ ...(input.metadata ?? {}), chunking: chunkingOptions })]
       );
       onProgress?.({
         stage: "WRITING_GRAPH",

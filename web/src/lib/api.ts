@@ -13,6 +13,7 @@ import type {
   ProjectStatsRecord,
   PublicAiProviderSettings,
   PublicMcpSettings,
+  ChunkingMode,
   SearchMode,
   SearchStreamEvent,
   SearchResult,
@@ -152,6 +153,11 @@ export const api = {
     title?: string;
     fileName: string;
     content: string;
+    chunking?: {
+      mode?: ChunkingMode;
+      maxTokens?: number;
+      overlapTokens?: number;
+    };
   }) {
     return request<{
       sourceId: string;
@@ -170,6 +176,11 @@ export const api = {
     title?: string;
     fileName: string;
     content: string;
+    chunking?: {
+      mode?: ChunkingMode;
+      maxTokens?: number;
+      overlapTokens?: number;
+    };
   }) {
     return request<{ job: UploadJobRecord }>("/api/documents/upload/jobs", {
       method: "POST",
@@ -192,6 +203,7 @@ export const api = {
     query: string;
     sourceIds: string[];
     searchMode?: SearchMode;
+    topK?: number;
   }) {
     return request<SearchResult>("/api/search", {
       method: "POST",
@@ -201,7 +213,7 @@ export const api = {
         strategy: "multi",
         searchMode: input.searchMode ?? "fast",
         returnTrace: true,
-        topK: 5
+        topK: input.topK
       })
     });
   },
@@ -210,6 +222,7 @@ export const api = {
     query: string;
     sourceIds: string[];
     searchMode?: SearchMode;
+    topK?: number;
   }, onEvent: (event: SearchStreamEvent) => void) {
     const response = await fetch("/api/search/stream", {
       method: "POST",
@@ -222,7 +235,7 @@ export const api = {
         strategy: "multi",
         searchMode: input.searchMode ?? "fast",
         returnTrace: true,
-        topK: 5
+        topK: input.topK
       })
     });
     if (!response.ok || !response.body) {
@@ -316,6 +329,10 @@ export const api = {
     llmTimeoutMs: number;
     llmMaxRetries: number;
     defaultSearchMode: SearchMode;
+    defaultSearchTopK: number;
+    defaultChunkingMode: ChunkingMode;
+    chunkTokenLimit: number;
+    chunkOverlapTokens: number;
   }) {
     return request<{ settings: PublicAiProviderSettings }>("/api/settings/ai", {
       method: "PUT",

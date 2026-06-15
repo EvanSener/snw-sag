@@ -63,7 +63,7 @@ describe("SearchService multi search", () => {
     }));
   });
 
-  it("caps vector search results to top 5 at the service boundary", async () => {
+  it("allows vector search up to the configured service maximum", async () => {
     const embeddings: EmbeddingClient = {
       generate: vi.fn(async () => [1, 0, 0]),
       batchGenerate: vi.fn()
@@ -75,7 +75,7 @@ describe("SearchService multi search", () => {
     };
     const service = new SearchService(embeddings, llm);
     const sourceId = "00000000-0000-0000-0000-000000000001";
-    repositories.searchChunksByVector.mockResolvedValue(Array.from({ length: 6 }, (_, index) => ({
+    repositories.searchChunksByVector.mockResolvedValue(Array.from({ length: 60 }, (_, index) => ({
       chunkId: `chunk-${index + 1}`,
       sourceId,
       documentId: "00000000-0000-0000-0000-000000000002",
@@ -93,9 +93,9 @@ describe("SearchService multi search", () => {
     });
 
     expect(repositories.searchChunksByVector).toHaveBeenCalledWith(expect.objectContaining({
-      topK: 5
+      topK: 50
     }));
-    expect(result.sections).toHaveLength(5);
+    expect(result.sections).toHaveLength(50);
   });
 
   it("expands only through new entities and ranks dual-phase candidates separately", async () => {
@@ -158,7 +158,7 @@ describe("SearchService multi search", () => {
     }));
   });
 
-  it("caps LLM rerank and final sections to top 5", async () => {
+  it("uses requested topK for LLM rerank and final sections", async () => {
     const embeddings: EmbeddingClient = {
       generate: vi.fn(async () => [1, 0, 0]),
       batchGenerate: vi.fn()
@@ -197,9 +197,9 @@ describe("SearchService multi search", () => {
     });
 
     expect(llm.rerankEvents).toHaveBeenCalledWith(expect.objectContaining({
-      topK: 5
+      topK: 50
     }));
-    expect(result.sections).toHaveLength(5);
+    expect(result.sections).toHaveLength(6);
   });
 
   it("uses fast mode without LLM entity extraction or LLM rerank", async () => {

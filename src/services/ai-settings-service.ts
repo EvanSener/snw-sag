@@ -3,7 +3,13 @@ import {
   getAiProviderSettings,
   upsertAiProviderSettings
 } from "../db/repositories.js";
-import type { AiProviderSettingsRecord, PublicAiProviderSettings, SearchMode } from "../types.js";
+import type { AiProviderSettingsRecord, ChunkingMode, PublicAiProviderSettings, SearchMode } from "../types.js";
+
+export const DEFAULT_SEARCH_TOP_K = 10;
+export const MAX_SEARCH_TOP_K = 50;
+export const DEFAULT_CHUNKING_MODE: ChunkingMode = "heading_strict";
+export const DEFAULT_CHUNK_TOKEN_LIMIT = 512;
+export const DEFAULT_CHUNK_OVERLAP_TOKENS = 100;
 
 export interface AiRuntimeSettings {
   embeddingBaseUrl: string;
@@ -18,6 +24,10 @@ export interface AiRuntimeSettings {
   llmTimeoutMs: number;
   llmMaxRetries: number;
   defaultSearchMode: SearchMode;
+  defaultSearchTopK: number;
+  defaultChunkingMode: ChunkingMode;
+  chunkTokenLimit: number;
+  chunkOverlapTokens: number;
 }
 
 export interface UpdateAiSettingsInput {
@@ -33,6 +43,10 @@ export interface UpdateAiSettingsInput {
   llmTimeoutMs: number;
   llmMaxRetries: number;
   defaultSearchMode: SearchMode;
+  defaultSearchTopK: number;
+  defaultChunkingMode: ChunkingMode;
+  chunkTokenLimit: number;
+  chunkOverlapTokens: number;
 }
 
 export class AiSettingsService {
@@ -44,6 +58,7 @@ export class AiSettingsService {
     const settings = await this.getSettingsOrFallback();
     const embeddingApiKey = settings.embeddingApiKey?.trim() ?? "";
     const llmApiKey = settings.llmApiKey?.trim() ?? "";
+    const chunkTokenLimit = readBoundedInteger(settings.metadata.chunkTokenLimit, DEFAULT_CHUNK_TOKEN_LIMIT, 64, 8192);
     return {
       embeddingBaseUrl: settings.embeddingBaseUrl,
       embeddingModel: settings.embeddingModel,
@@ -56,7 +71,11 @@ export class AiSettingsService {
       hasRemoteLlm: llmApiKey.length > 0,
       llmTimeoutMs: settings.llmTimeoutMs,
       llmMaxRetries: settings.llmMaxRetries,
-      defaultSearchMode: readDefaultSearchMode(settings.metadata)
+      defaultSearchMode: readDefaultSearchMode(settings.metadata),
+      defaultSearchTopK: readBoundedInteger(settings.metadata.defaultSearchTopK, DEFAULT_SEARCH_TOP_K, 1, MAX_SEARCH_TOP_K),
+      defaultChunkingMode: readDefaultChunkingMode(settings.metadata),
+      chunkTokenLimit,
+      chunkOverlapTokens: readBoundedInteger(settings.metadata.chunkOverlapTokens, DEFAULT_CHUNK_OVERLAP_TOKENS, 0, chunkTokenLimit - 1)
     };
   }
 
@@ -64,6 +83,8 @@ export class AiSettingsService {
     if (input.embeddingDimensions !== SUPPORTED_EMBEDDING_DIMENSIONS) {
       throw new Error(`embeddingDimensions must be ${SUPPORTED_EMBEDDING_DIMENSIONS}`);
     }
+    const chunkTokenLimit = clampInteger(input.chunkTokenLimit, DEFAULT_CHUNK_TOKEN_LIMIT, 64, 8192);
+    const chunkOverlapTokens = clampInteger(input.chunkOverlapTokens, DEFAULT_CHUNK_OVERLAP_TOKENS, 0, chunkTokenLimit - 1);
     const current = await this.getSettingsOrFallback();
     const embeddingApiKey = input.clearEmbeddingApiKey ? null : normalizeOptionalSecret(input.embeddingApiKey);
     const llmApiKey = input.clearLlmApiKey ? null : normalizeOptionalSecret(input.llmApiKey);
@@ -82,7 +103,11 @@ export class AiSettingsService {
       metadata: {
         updatedVia: "webui",
         previousUpdatedAt: current.updatedAt,
-        defaultSearchMode: input.defaultSearchMode
+        defaultSearchMode: input.defaultSearchMode,
+        defaultSearchTopK: clampInteger(input.defaultSearchTopK, DEFAULT_SEARCH_TOP_K, 1, MAX_SEARCH_TOP_K),
+        defaultChunkingMode: input.defaultChunkingMode,
+        chunkTokenLimit,
+        chunkOverlapTokens
       }
     });
     return toPublicSettings(updated);
@@ -119,7 +144,11 @@ function envSettings(): AiProviderSettingsRecord {
     llmTimeoutMs: config.LLM_TIMEOUT_MS,
     llmMaxRetries: config.LLM_MAX_RETRIES,
     metadata: {
-      defaultSearchMode: config.DEFAULT_SEARCH_MODE
+      defaultSearchMode: config.DEFAULT_SEARCH_MODE,
+      defaultSearchTopK: DEFAULT_SEARCH_TOP_K,
+      defaultChunkingMode: DEFAULT_CHUNKING_MODE,
+      chunkTokenLimit: DEFAULT_CHUNK_TOKEN_LIMIT,
+      chunkOverlapTokens: DEFAULT_CHUNK_OVERLAP_TOKENS
     },
     createdAt: now,
     updatedAt: now
@@ -127,6 +156,7 @@ function envSettings(): AiProviderSettingsRecord {
 }
 
 function toPublicSettings(settings: AiProviderSettingsRecord): PublicAiProviderSettings {
+  const chunkTokenLimit = readBoundedInteger(settings.metadata.chunkTokenLimit, DEFAULT_CHUNK_TOKEN_LIMIT, 64, 8192);
   return {
     id: "global",
     embeddingBaseUrl: settings.embeddingBaseUrl,
@@ -139,12 +169,32 @@ function toPublicSettings(settings: AiProviderSettingsRecord): PublicAiProviderS
     llmTimeoutMs: settings.llmTimeoutMs,
     llmMaxRetries: settings.llmMaxRetries,
     defaultSearchMode: readDefaultSearchMode(settings.metadata),
+    defaultSearchTopK: readBoundedInteger(settings.metadata.defaultSearchTopK, DEFAULT_SEARCH_TOP_K, 1, MAX_SEARCH_TOP_K),
+    defaultChunkingMode: readDefaultChunkingMode(settings.metadata),
+    chunkTokenLimit,
+    chunkOverlapTokens: readBoundedInteger(settings.metadata.chunkOverlapTokens, DEFAULT_CHUNK_OVERLAP_TOKENS, 0, chunkTokenLimit - 1),
     updatedAt: settings.updatedAt
   };
 }
 
 function readDefaultSearchMode(metadata: Record<string, unknown>): SearchMode {
   return metadata.defaultSearchMode === "standard" ? "standard" : "fast";
+}
+
+function readDefaultChunkingMode(metadata: Record<string, unknown>): ChunkingMode {
+  return metadata.defaultChunkingMode === "token" ? "token" : DEFAULT_CHUNKING_MODE;
+}
+
+function readBoundedInteger(value: unknown, fallback: number, min: number, max: number): number {
+  return clampInteger(value, fallback, min, max);
+}
+
+function clampInteger(value: unknown, fallback: number, min: number, max: number): number {
+  const numberValue = typeof value === "number" ? value : Number(value);
+  if (!Number.isFinite(numberValue)) {
+    return fallback;
+  }
+  return Math.max(min, Math.min(Math.trunc(numberValue), max));
 }
 
 function normalizeOptionalSecret(value: string | undefined): string | null {

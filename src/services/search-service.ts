@@ -3,7 +3,7 @@ import { config } from "../config/env.js";
 import { embeddingClient, type EmbeddingClient } from "../ai/embedding-client.js";
 import { llmClient, type LlmClient } from "../ai/llm-client.js";
 import { rerankClient, type RerankClient } from "../ai/rerank-client.js";
-import { aiSettingsService } from "./ai-settings-service.js";
+import { MAX_SEARCH_TOP_K, aiSettingsService } from "./ai-settings-service.js";
 import {
   assertSourcesAccessible,
   coarseRankEventsByContent,
@@ -44,7 +44,7 @@ interface MultiOptions {
 }
 
 type SearchProgressEmitter = (event: SearchProgressEvent) => void;
-const MAX_SEARCH_RESULTS = 5;
+const MAX_SEARCH_RESULTS = MAX_SEARCH_TOP_K;
 
 export class SearchService {
   constructor(
@@ -67,6 +67,8 @@ export class SearchService {
   }
 
   async vectorSearch(input: SearchInput, emit?: SearchProgressEmitter): Promise<SearchResult> {
+    const runtimeSettings = await aiSettingsService.getRuntimeSettings();
+    const topK = resolveFinalSearchTopK(input.multi?.maxSections ?? input.topK ?? runtimeSettings.defaultSearchTopK);
     const traceId = randomUUID();
     const timings: Record<string, number> = {};
     const queryVector = await timed(timings, "queryEmbedding", () => this.embeddings.generate(input.query), emit, {
@@ -76,20 +78,21 @@ export class SearchService {
     const sections = await timed(timings, "vectorSearchChunks", () => searchChunksByVector({
       sourceIds: input.sourceIds,
       queryVector,
-      topK: resolveFinalSearchTopK(input.multi?.maxSections ?? input.topK)
+      topK
     }), emit, {
       title: "向量召回切片",
       detail: "按查询向量召回最相近的文档切片。"
     });
     return {
       traceId,
-      sections: sections.slice(0, resolveFinalSearchTopK(input.multi?.maxSections ?? input.topK)).map((section) => ({ ...section }))
+      sections: sections.slice(0, topK).map((section) => ({ ...section }))
     };
   }
 
   async multiSearch(input: SearchInput, emit?: SearchProgressEmitter): Promise<SearchResult> {
-    const options = resolveMultiOptions(input);
-    const searchMode = input.searchMode ?? (await aiSettingsService.getRuntimeSettings()).defaultSearchMode;
+    const runtimeSettings = await aiSettingsService.getRuntimeSettings();
+    const options = resolveMultiOptions(input, runtimeSettings.defaultSearchTopK);
+    const searchMode = input.searchMode ?? runtimeSettings.defaultSearchMode;
     const traceId = randomUUID();
     const timings: Record<string, number> = {};
     const trace: SearchTrace = {
@@ -518,14 +521,15 @@ export class SearchService {
   }
 }
 
-function resolveMultiOptions(input: SearchInput): MultiOptions {
+function resolveMultiOptions(input: SearchInput, defaultSearchTopK: number): MultiOptions {
   const multi = input.multi ?? {};
-  const rerankTopK = resolveFinalSearchTopK(multi.rerankTopK ?? input.topK);
-  const maxSections = resolveFinalSearchTopK(multi.maxSections ?? input.topK);
+  const topK = resolveFinalSearchTopK(input.topK ?? defaultSearchTopK);
+  const rerankTopK = resolveFinalSearchTopK(multi.rerankTopK ?? topK);
+  const maxSections = resolveFinalSearchTopK(multi.maxSections ?? topK);
   return {
     subStrategy: input.subStrategy ?? "multi",
     entityTopK: multi.entityTopK ?? 20,
-    multiTopK: multi.multiTopK ?? input.topK ?? 20,
+    multiTopK: multi.multiTopK ?? 20,
     keySimilarityThreshold: multi.keySimilarityThreshold ?? 0.9,
     similarityThreshold: multi.similarityThreshold ?? 0.4,
     maxHops: multi.maxHops ?? 1,

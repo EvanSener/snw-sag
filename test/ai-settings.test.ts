@@ -24,11 +24,15 @@ describe("AiSettingsService", () => {
       llmModel: "qwen3.6-flash",
       llmTimeoutMs: 60_000,
       llmMaxRetries: 2,
-      defaultSearchMode: "fast"
+      defaultSearchMode: "fast",
+      defaultSearchTopK: 10,
+      defaultChunkingMode: "heading_strict",
+      chunkTokenLimit: 512,
+      chunkOverlapTokens: 100
     })).rejects.toThrow("embeddingDimensions must be 1024");
   });
 
-  it("persists default search mode in settings metadata", async () => {
+  it("persists retrieval and chunking defaults in settings metadata", async () => {
     const service = new AiSettingsService();
     repositoryMocks.upsertAiProviderSettings.mockResolvedValueOnce({
       id: "global",
@@ -42,7 +46,11 @@ describe("AiSettingsService", () => {
       llmTimeoutMs: 60_000,
       llmMaxRetries: 2,
       metadata: {
-        defaultSearchMode: "standard"
+        defaultSearchMode: "standard",
+        defaultSearchTopK: 10,
+        defaultChunkingMode: "token",
+        chunkTokenLimit: 768,
+        chunkOverlapTokens: 128
       },
       createdAt: "2026-06-06T00:00:00.000Z",
       updatedAt: "2026-06-06T00:00:00.000Z"
@@ -56,14 +64,26 @@ describe("AiSettingsService", () => {
       llmModel: "qwen3.6-flash",
       llmTimeoutMs: 60_000,
       llmMaxRetries: 2,
-      defaultSearchMode: "standard"
+      defaultSearchMode: "standard",
+      defaultSearchTopK: 10,
+      defaultChunkingMode: "token",
+      chunkTokenLimit: 768,
+      chunkOverlapTokens: 128
     });
 
     expect(repositoryMocks.upsertAiProviderSettings).toHaveBeenCalledWith(expect.objectContaining({
       metadata: expect.objectContaining({
-        defaultSearchMode: "standard"
+        defaultSearchMode: "standard",
+        defaultSearchTopK: 10,
+        defaultChunkingMode: "token",
+        chunkTokenLimit: 768,
+        chunkOverlapTokens: 128
       })
     }));
     expect(settings.defaultSearchMode).toBe("standard");
+    expect(settings.defaultSearchTopK).toBe(10);
+    expect(settings.defaultChunkingMode).toBe("token");
+    expect(settings.chunkTokenLimit).toBe(768);
+    expect(settings.chunkOverlapTokens).toBe(128);
   });
 });

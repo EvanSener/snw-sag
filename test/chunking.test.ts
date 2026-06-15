@@ -3,9 +3,7 @@ import { chunkMarkdown, estimateTokens, stripMarkdown } from "../src/ingestion/c
 
 describe("chunkMarkdown", () => {
   it("creates ordered sections and chunks", () => {
-    const result = chunkMarkdown("# One\n\nFirst paragraph.\n\n# Two\n\nSecond paragraph.", {
-      maxTokens: 20
-    });
+    const result = chunkMarkdown("# One\n\nFirst paragraph.\n\n# Two\n\nSecond paragraph.");
 
     expect(result.sections.length).toBeGreaterThanOrEqual(2);
     expect(result.chunks.length).toBeGreaterThanOrEqual(1);
@@ -20,7 +18,7 @@ describe("chunkMarkdown", () => {
 
   it("splits long Chinese paragraphs near the configured token limit", () => {
     const paragraph = "SAG系统用于检索中文长文档，并抽取事件、实体、关系和来源片段。".repeat(120);
-    const result = chunkMarkdown(paragraph, { maxTokens: 512 });
+    const result = chunkMarkdown(paragraph, { mode: "token", maxTokens: 512, overlapTokens: 0 });
     const sectionIds = new Set(result.sections.map((section) => section.id));
 
     expect(result.chunks.length).toBeGreaterThan(1);
@@ -35,7 +33,7 @@ describe("chunkMarkdown", () => {
 
   it("splits long English text by token limit even without markdown headings", () => {
     const paragraph = "SAG retrieves evidence through events, entities, relations, and source chunks. ".repeat(180);
-    const result = chunkMarkdown(paragraph, { maxTokens: 512 });
+    const result = chunkMarkdown(paragraph, { mode: "token", maxTokens: 512, overlapTokens: 0 });
 
     expect(result.chunks.length).toBeGreaterThan(1);
     for (const chunk of result.chunks) {
@@ -44,7 +42,7 @@ describe("chunkMarkdown", () => {
     }
   });
 
-  it("keeps markdown headings, chunk ranks, and section references traceable", () => {
+  it("uses heading_strict as the benchmark default", () => {
     const result = chunkMarkdown([
       "# Architecture",
       "",
@@ -53,9 +51,10 @@ describe("chunkMarkdown", () => {
       "## Retrieval",
       "",
       "The search flow recalls entities and events before returning source chunks."
-    ].join("\n"), { maxTokens: 40 });
+    ].join("\n"));
     const sectionIds = new Set(result.sections.map((section) => section.id));
 
+    expect(result.chunks).toHaveLength(2);
     expect(result.chunks.map((chunk) => chunk.rank)).toEqual(result.chunks.map((_, index) => index));
     expect(result.sections.some((section) => section.heading === "Architecture")).toBe(true);
     expect(result.sections.some((section) => section.heading === "Retrieval")).toBe(true);
@@ -64,6 +63,17 @@ describe("chunkMarkdown", () => {
       for (const sectionId of chunk.sectionIds) {
         expect(sectionIds.has(sectionId)).toBe(true);
       }
+    }
+  });
+
+  it("overlaps token chunks when configured", () => {
+    const text = Array.from({ length: 180 }, (_, index) => `token${index}`).join(" ");
+    const withoutOverlap = chunkMarkdown(text, { mode: "token", maxTokens: 80, overlapTokens: 0 });
+    const withOverlap = chunkMarkdown(text, { mode: "token", maxTokens: 80, overlapTokens: 20 });
+
+    expect(withOverlap.chunks.length).toBeGreaterThan(withoutOverlap.chunks.length);
+    for (const chunk of withOverlap.chunks) {
+      expect(estimateTokens(chunk.rawContent)).toBeLessThanOrEqual(80);
     }
   });
 });

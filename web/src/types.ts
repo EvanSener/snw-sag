@@ -105,6 +105,7 @@ export interface SearchResult {
 }
 
 export type SearchMode = "standard" | "fast";
+export type ChunkingMode = "heading_strict" | "token";
 
 export interface SearchProgressEvent {
   type: "step";
@@ -264,6 +265,10 @@ export interface PublicAiProviderSettings {
   llmTimeoutMs: number;
   llmMaxRetries: number;
   defaultSearchMode: SearchMode;
+  defaultSearchTopK: number;
+  defaultChunkingMode: ChunkingMode;
+  chunkTokenLimit: number;
+  chunkOverlapTokens: number;
   updatedAt: string;
 }
 

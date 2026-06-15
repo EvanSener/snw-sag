@@ -38,6 +38,7 @@ import type {
   ModelCallLogRecord,
   ProjectGraphRecord,
   ProjectStatsRecord,
+  ChunkingMode,
   PublicAiProviderSettings,
   PublicMcpSettings,
   SearchMode,
@@ -477,14 +478,18 @@ function AppShell() {
     }
   }
 
-  async function renameProject(project: SourceRecord) {
-    const name = window.prompt(t("请输入新的项目名称", "Enter a new project name"), project.name)?.trim();
-    if (!name || name === project.name) return;
+  async function renameProject(project: SourceRecord, name: string) {
+    const nextName = name.trim();
+    if (!nextName || nextName === project.name) return false;
+    setError("");
     try {
-      await api.updateProject(project.id, { name });
+      await api.updateProject(project.id, { name: nextName });
       await loadProjects();
+      setStatus(t(`已重命名项目为「${nextName}」。`, `Project renamed to "${nextName}".`));
+      return true;
     } catch (err) {
       setError(getErrorMessage(err));
+      return false;
     }
   }
 
@@ -1112,7 +1117,7 @@ function AppShell() {
           }
         }}
         onToggleProjectExpanded={toggleProjectExpanded}
-        onRenameProject={(project) => void renameProject(project)}
+        onRenameProject={renameProject}
         onArchiveOrRestoreProject={(project) => void archiveOrRestoreProject(project)}
         onDeleteProject={(project) => void permanentlyDeleteProject(project)}
         onToggleArchived={setShowArchivedProjects}
@@ -1258,7 +1263,7 @@ function ProjectRail(props: {
   onCreateProject: () => Promise<boolean>;
   onSelectProject: (projectId: string) => void;
   onToggleProjectExpanded: (projectId: string) => void;
-  onRenameProject: (project: SourceRecord) => void;
+  onRenameProject: (project: SourceRecord, name: string) => Promise<boolean>;
   onArchiveOrRestoreProject: (project: SourceRecord) => void;
   onDeleteProject: (project: SourceRecord) => void;
   onToggleArchived: (value: boolean) => void;
@@ -1270,7 +1275,14 @@ function ProjectRail(props: {
   const [openProjectMenuId, setOpenProjectMenuId] = useState<string | null>(null);
   const [createProjectDialogOpen, setCreateProjectDialogOpen] = useState(false);
   const [isCreatingProject, setIsCreatingProject] = useState(false);
+  const [renameProjectTarget, setRenameProjectTarget] = useState<SourceRecord | null>(null);
+  const [renameProjectName, setRenameProjectName] = useState("");
+  const [isRenamingProject, setIsRenamingProject] = useState(false);
   const canCreateProject = props.newProjectName.trim().length > 0 && !isCreatingProject;
+  const canRenameProject = Boolean(renameProjectTarget)
+    && renameProjectName.trim().length > 0
+    && renameProjectName.trim() !== renameProjectTarget?.name
+    && !isRenamingProject;
 
   function openCreateProjectDialog() {
     props.onNewProjectNameChange("");
@@ -1283,6 +1295,18 @@ function ProjectRail(props: {
     setCreateProjectDialogOpen(false);
   }
 
+  function openRenameProjectDialog(project: SourceRecord) {
+    setCreateProjectDialogOpen(false);
+    setRenameProjectTarget(project);
+    setRenameProjectName(project.name);
+  }
+
+  function closeRenameProjectDialog() {
+    if (isRenamingProject) return;
+    setRenameProjectTarget(null);
+    setRenameProjectName("");
+  }
+
   async function submitCreateProject() {
     if (!canCreateProject) return;
     setIsCreatingProject(true);
@@ -1293,6 +1317,20 @@ function ProjectRail(props: {
       }
     } finally {
       setIsCreatingProject(false);
+    }
+  }
+
+  async function submitRenameProject() {
+    if (!renameProjectTarget || !canRenameProject) return;
+    setIsRenamingProject(true);
+    try {
+      const renamed = await props.onRenameProject(renameProjectTarget, renameProjectName);
+      if (renamed) {
+        setRenameProjectTarget(null);
+        setRenameProjectName("");
+      }
+    } finally {
+      setIsRenamingProject(false);
     }
   }
 
@@ -1409,7 +1447,7 @@ function ProjectRail(props: {
                   <ProjectMenuItem
                     onClick={() => {
                       closeMenu();
-                      props.onRenameProject(project);
+                      openRenameProjectDialog(project);
                     }}
                   >
                     {t("重命名", "Rename")}
@@ -1504,6 +1542,41 @@ function ProjectRail(props: {
               </Button>
               <Button size="sm" onClick={() => void submitCreateProject()} disabled={!canCreateProject}>
                 {isCreatingProject ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                {t("确定", "Confirm")}
+              </Button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {renameProjectTarget ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4" role="presentation">
+          <div className="w-full max-w-sm rounded-lg border border-border bg-background p-4 shadow-lg" role="dialog" aria-modal="true" aria-labelledby="rename-project-title">
+            <div id="rename-project-title" className="text-sm font-semibold">{t("重命名项目", "Rename project")}</div>
+            <p className="mt-1 text-xs text-muted-foreground">{t("输入新的项目名称。", "Enter a new project name.")}</p>
+            <Input
+              autoFocus
+              className="mt-4"
+              value={renameProjectName}
+              onChange={(event) => setRenameProjectName(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Escape") {
+                  closeRenameProjectDialog();
+                }
+                if (event.key === "Enter") {
+                  event.preventDefault();
+                  void submitRenameProject();
+                }
+              }}
+              placeholder={t("项目名称", "Project name")}
+              disabled={isRenamingProject}
+            />
+            <div className="mt-4 flex justify-end gap-2">
+              <Button variant="ghost" size="sm" onClick={closeRenameProjectDialog} disabled={isRenamingProject}>
+                {t("取消", "Cancel")}
+              </Button>
+              <Button size="sm" onClick={() => void submitRenameProject()} disabled={!canRenameProject}>
+                {isRenamingProject ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
                 {t("确定", "Confirm")}
               </Button>
             </div>
@@ -2572,7 +2645,25 @@ type SettingsInput = {
   llmTimeoutMs: number;
   llmMaxRetries: number;
   defaultSearchMode: SearchMode;
+  defaultSearchTopK: number;
+  defaultChunkingMode: ChunkingMode;
+  chunkTokenLimit: number;
+  chunkOverlapTokens: number;
 };
+
+const DEFAULT_SEARCH_TOP_K = 10;
+const DEFAULT_CHUNKING_MODE: ChunkingMode = "heading_strict";
+const DEFAULT_CHUNK_TOKEN_LIMIT = 512;
+const DEFAULT_CHUNK_OVERLAP_TOKENS = 100;
+
+function boundedInteger(value: unknown, fallback: number, min: number, max: number): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) return fallback;
+  return Math.max(min, Math.min(Math.trunc(value), max));
+}
+
+function normalizeChunkingMode(value: unknown): ChunkingMode {
+  return value === "token" ? "token" : DEFAULT_CHUNKING_MODE;
+}
 
 function SettingsPanel(props: {
   settings: PublicAiProviderSettings | null;
@@ -2595,6 +2686,10 @@ function SettingsPanel(props: {
   const [llmTimeoutMs, setLlmTimeoutMs] = useState(60000);
   const [llmMaxRetries, setLlmMaxRetries] = useState(2);
   const [defaultSearchMode, setDefaultSearchMode] = useState<SearchMode>("fast");
+  const [defaultSearchTopK, setDefaultSearchTopK] = useState(10);
+  const [defaultChunkingMode, setDefaultChunkingMode] = useState<ChunkingMode>("heading_strict");
+  const [chunkTokenLimit, setChunkTokenLimit] = useState(512);
+  const [chunkOverlapTokens, setChunkOverlapTokens] = useState(100);
 
   useEffect(() => {
     if (!props.settings) return;
@@ -2610,7 +2705,18 @@ function SettingsPanel(props: {
     setLlmTimeoutMs(props.settings.llmTimeoutMs);
     setLlmMaxRetries(props.settings.llmMaxRetries);
     setDefaultSearchMode(props.settings.defaultSearchMode);
+    setDefaultSearchTopK(boundedInteger(props.settings.defaultSearchTopK, DEFAULT_SEARCH_TOP_K, 1, 50));
+    setDefaultChunkingMode(normalizeChunkingMode(props.settings.defaultChunkingMode));
+    const normalizedTokenLimit = boundedInteger(props.settings.chunkTokenLimit, DEFAULT_CHUNK_TOKEN_LIMIT, 64, 8192);
+    setChunkTokenLimit(normalizedTokenLimit);
+    setChunkOverlapTokens(
+      boundedInteger(props.settings.chunkOverlapTokens, DEFAULT_CHUNK_OVERLAP_TOKENS, 0, normalizedTokenLimit - 1)
+    );
   }, [props.settings]);
+
+  useEffect(() => {
+    setChunkOverlapTokens((current) => Math.min(current, Math.max(0, chunkTokenLimit - 1)));
+  }, [chunkTokenLimit]);
 
   if (!props.settings) return <EmptyState title={t("正在加载设置", "Loading settings")} description={t("请稍候。", "Please wait.")} />;
 
@@ -2631,7 +2737,11 @@ function SettingsPanel(props: {
           clearLlmApiKey,
           llmTimeoutMs,
           llmMaxRetries,
-          defaultSearchMode
+          defaultSearchMode,
+          defaultSearchTopK,
+          defaultChunkingMode,
+          chunkTokenLimit,
+          chunkOverlapTokens
         });
       }}
     >
@@ -2747,6 +2857,59 @@ function SettingsPanel(props: {
               : t("默认使用标准链路：先由 LLM 识别查询实体，最后由 LLM 选择候选事件。", "Default standard path: first let the LLM identify query entities, then let the LLM choose candidate events.")}
           </div>
         </div>
+        <Field label={t("默认 Top-K", "Default top-k")}>
+          <Input
+            type="number"
+            min={1}
+            max={50}
+            value={defaultSearchTopK}
+            onChange={(event) => setDefaultSearchTopK(Number(event.target.value))}
+          />
+        </Field>
+        <div className="space-y-3 md:col-span-2">
+          <div className="text-sm font-medium">{t("默认切片模式", "Default chunking mode")}</div>
+          <div className="flex w-fit rounded-md border border-border bg-background p-0.5">
+            {([
+              { value: "heading_strict" as const, label: t("标题严格", "Heading strict") },
+              { value: "token" as const, label: t("Token 强制", "Token window") }
+            ]).map((mode) => (
+              <button
+                key={mode.value}
+                type="button"
+                className={cn(
+                  "rounded px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground",
+                  defaultChunkingMode === mode.value && "bg-foreground text-background hover:text-background"
+                )}
+                onClick={() => setDefaultChunkingMode(mode.value)}
+              >
+                {mode.label}
+              </button>
+            ))}
+          </div>
+          <div className="text-xs leading-5 text-muted-foreground">
+            {defaultChunkingMode === "heading_strict"
+              ? t("默认与 benchmark 一致：遇到新标题就形成独立切片，不按 token 合并短片段。", "Matches the benchmark default: each heading section becomes an independent chunk without token-based merging.")
+              : t("强制按 token 窗口切片，并按 overlap 保留上下文。", "Force token-window chunking and keep context with overlap.")}
+          </div>
+        </div>
+        <Field label={t("Token 数", "Token limit")}>
+          <Input
+            type="number"
+            min={64}
+            max={8192}
+            value={chunkTokenLimit}
+            onChange={(event) => setChunkTokenLimit(Number(event.target.value))}
+          />
+        </Field>
+        <Field label={t("Overlap tokens", "Overlap tokens")}>
+          <Input
+            type="number"
+            min={0}
+            max={Math.max(0, chunkTokenLimit - 1)}
+            value={chunkOverlapTokens}
+            onChange={(event) => setChunkOverlapTokens(Number(event.target.value))}
+          />
+        </Field>
       </SettingsCard>
 
       <SettingsCard title={t("危险操作", "Danger zone")} badge={t("谨慎", "Careful")}>

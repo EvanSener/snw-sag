@@ -52,6 +52,7 @@ function eventFromRow(row: Record<string, unknown>): EventRecord {
     title: String(row.title),
     summary: String(row.summary ?? ""),
     content: String(row.content ?? ""),
+    category: row.category == null ? null : String(row.category),
     rank: Number(row.rank ?? 0),
     score: row.score == null ? undefined : Number(row.score),
     titleEmbedding: embeddingPreviewFromText(row.title_embedding_preview),
@@ -717,7 +718,7 @@ export async function getEventDetail(input: {
   const eventResult = await pool.query(
     `
       select
-        e.id, e.source_id, e.document_id, e.chunk_id, e.title, e.summary, e.content, e.rank,
+        e.id, e.source_id, e.document_id, e.chunk_id, e.title, e.summary, e.content, e.category, e.rank,
         d.id as document_id_for_detail,
         d.title as document_title,
         d.status as document_status,
@@ -1147,15 +1148,56 @@ export async function getLineageGraphPage(input: {
          or lr.target_entity_id = $3
          or lr.context_task_entity_id = $3
        )`
-    : "and lr.relation_type = 'PRODUCES'";
+    : "and lr.relation_type in ('PRODUCES', 'DEPENDS_ON')";
   const limitParameter = input.nodeId ? "$4" : "$3";
   const parameters = input.nodeId
     ? [input.sourceId, input.tenantId, input.nodeId, requestedLimit + 1]
     : [input.sourceId, input.tenantId, requestedLimit + 1];
   const result = await pool.query(
     `
+      with task_dependencies as (
+        select
+          'task-dependency:' || producer.source_entity_id::text || ':' || flow.context_task_entity_id::text as id,
+          producer.source_id,
+          flow.event_id,
+          producer.source_entity_id,
+          flow.context_task_entity_id as target_entity_id,
+          'DEPENDS_ON'::text as relation_type,
+          null::uuid as context_task_entity_id
+        from lineage_relations producer
+        join lineage_relations flow
+          on flow.source_id = producer.source_id
+         and flow.source_entity_id = producer.target_entity_id
+         and flow.relation_type = 'DATA_FLOW'
+         and flow.context_task_entity_id is not null
+        where producer.source_id = $1
+          and producer.relation_type = 'PRODUCES'
+          and producer.source_entity_id <> flow.context_task_entity_id
+      ),
+      graph_relations as (
+        select
+          lr.id::text as id,
+          lr.source_id,
+          lr.event_id,
+          lr.source_entity_id,
+          lr.target_entity_id,
+          lr.relation_type,
+          lr.context_task_entity_id
+        from lineage_relations lr
+        where lr.source_id = $1
+        union all
+        select
+          id,
+          source_id,
+          event_id,
+          source_entity_id,
+          target_entity_id,
+          relation_type,
+          context_task_entity_id
+        from task_dependencies
+      )
       select
-        min(lr.id::text) as id,
+        min(lr.id) as id,
         lr.source_entity_id,
         source_ent.source_id,
         source_ent.type as source_type,
@@ -1169,8 +1211,8 @@ export async function getLineageGraphPage(input: {
         lr.context_task_entity_id,
         context_ent.name as context_task_name,
         min(lr.event_id::text) as event_id,
-        count(*)::int as evidence_count
-      from lineage_relations lr
+        count(distinct lr.event_id)::int as evidence_count
+      from graph_relations lr
       join entities source_ent on source_ent.id = lr.source_entity_id
       join entities target_ent on target_ent.id = lr.target_entity_id
       left join entities context_ent on context_ent.id = lr.context_task_entity_id
@@ -1340,7 +1382,7 @@ export async function listEventsByDocument(input: {
   const result = await pool.query(
     `
       select e.id, e.source_id, e.document_id, e.chunk_id, e.title, e.summary,
-             e.content, e.rank, e.title_embedding::text as title_embedding_preview,
+             e.content, e.category, e.rank, e.title_embedding::text as title_embedding_preview,
              e.content_embedding::text as content_embedding_preview,
              count(ee.entity_id)::int as entity_count,
              coalesce(

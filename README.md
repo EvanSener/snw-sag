@@ -57,7 +57,7 @@ This project is an out-of-the-box document retrieval workbench built on SAG. Aft
 ```
 ````
 
-任务只通过 `PRODUCES` 指向写入目标表；表数据流和 JOIN 用 `contextTask` 保留执行任务；表字段归属和字段加工分别使用 `HAS_COLUMN` 与 `*_FROM`。图谱首屏只读取受限数量的 `PRODUCES` 骨架，节点单击按一跳加载，实体搜索不读取全量关系：
+任务只通过 `PRODUCES` 指向写入目标表；表数据流和 JOIN 用 `contextTask` 保留执行任务；表字段归属和字段加工分别使用 `HAS_COLUMN` 与 `*_FROM`。图谱首屏读取受限数量的 `PRODUCES` 骨架，并从生产表和消费任务上下文推导 `DEPENDS_ON` 任务依赖；节点单击按一跳加载，实体搜索不读取全量关系：
 
 ```text
 GET /api/projects/:projectId/lineage-graph?limit=100
@@ -112,17 +112,17 @@ Core features:
 
 - **Project management**: each project has its own documents, conversations, graph, and MCP configuration.
 - **Multi-document upload**: upload multiple Markdown / TXT files at once, with processing stages and progress.
-- **Document processing results**: inspect chunks, events, entities, embedding data, keyword title search, and paginated browsing.
+- **Document processing results**: inspect chunks, events, entities, embedding data, keyword title search, event/entity type filters, and paginated browsing.
 - **Conversational retrieval**: ask multi-turn questions over the current project, with streaming output and stop generation.
 - **Source citations**: answers can show numbered citations; click a number to view the original chunk.
 - **Search trace visualization**: the right panel shows SAG's internal retrieval steps and latency in real time.
 - **Raw logs**: browser cache stores raw LLM / Embedding / Rerank requests and responses.
-- **Knowledge graph**: explore ordinary event/entity graphs or lazily expand typed task/table/column lineage graphs.
+- **Knowledge graph**: explore ordinary event/entity graphs or lazily expand a white-canvas Three.js 3D lineage graph, with independent task/table/column node, label, and five relation-family visibility controls.
 - **MCP integration**: each project exposes its own MCP configuration so external agents can call the current project directly.
 
 ## Tech Stack
 
-SAG uses TypeScript across the stack. The frontend is a React + Vite + Tailwind CSS WebUI. The backend uses Fastify HTTP APIs, the MCP TypeScript SDK, and layered service modules. The data layer uses PostgreSQL, pgvector, full-text search, and SQL multi-hop queries. Model providers are OpenAI-compatible LLM, Embedding, and Rerank APIs.
+SAG uses TypeScript across the stack. The frontend is a React + Vite + Tailwind CSS WebUI; typed lineage uses a lazily loaded Three.js/WebGL force graph. The backend uses Fastify HTTP APIs, the MCP TypeScript SDK, and layered service modules. The data layer uses PostgreSQL, pgvector, full-text search, and SQL multi-hop queries. Model providers are OpenAI-compatible LLM, Embedding, and Rerank APIs.
 
 ## Workbench Preview
 
@@ -134,9 +134,11 @@ In the Document tab, you can upload documents, inspect processing status, chunks
 
 ### Graph Exploration
 
-In the Graph tab, you can explore entity-event relations across a project. Nodes support drag, zoom, click-to-expand, and double-click details.
+In the Graph tab, ordinary projects retain the entity-event view. Typed lineage projects use a rotatable 3D task/table/column graph with search, click-to-focus and one-hop expansion, details, fit-to-view, type colors, and independent controls for nodes, labels, and task-task/task-table/table-table/table-column/column-column relations.
 
 ![SAG graph view](docs/assets/sag-graph.png)
+
+The local visual smoke test can be repeated against a running server with `npm run verify:lineage-ui`; it checks document type filters, task dependencies, WebGL pixels, controls, and desktop/mobile overflow.
 
 ### Conversational Retrieval
 

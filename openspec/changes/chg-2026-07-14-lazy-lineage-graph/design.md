@@ -16,7 +16,7 @@
 
 `GET /api/projects/:projectId/lineage-graph`：
 
-- 无参数：只返回受上限约束的 `PRODUCES` 骨架。
+- 无参数：返回受上限约束的 `PRODUCES` 骨架和可由现有表数据流推导的 `DEPENDS_ON` 任务依赖。
 - `nodeId`：返回该节点的一跳入边、出边和任务上下文。
 - `query`：返回匹配 task/table/column 节点，随后由客户端按节点展开。
 - `limit`：服务端限制在安全范围，响应返回 `hasMore`。

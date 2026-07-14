@@ -23,7 +23,7 @@
 
 ### Requirement: 图 API 必须按需加载
 
-无参数请求 MUST 只返回任务产出骨架；节点请求 MUST 只返回一跳关系；所有请求 MUST 有服务端上限和 `hasMore`。
+无参数请求 MUST 只返回任务产出骨架及从既有类型关系推导的任务依赖；节点请求 MUST 只返回一跳关系；所有请求 MUST 有服务端上限和 `hasMore`。
 
 #### Scenario: 大型项目首屏
 

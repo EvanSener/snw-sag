@@ -242,6 +242,7 @@ export interface EventRecord {
   title: string;
   summary: string;
   content: string;
+  category?: string | null;
   rank: number;
   score?: number;
   entities?: EntityRecord[];

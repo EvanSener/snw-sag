@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { lazy, Suspense, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   Archive,
   ArchiveRestore,
@@ -7,6 +7,7 @@ import {
   FileText,
   Folder,
   FolderOpen,
+  ListFilter,
   Loader2,
   MessageSquare,
   MoreHorizontal,
@@ -54,7 +55,6 @@ import { Card, CardContent, CardHeader } from "./components/ui/card";
 import { Input } from "./components/ui/input";
 import { Textarea } from "./components/ui/textarea";
 import { ProjectGraphFlow } from "./components/ProjectGraphFlow";
-import { LineageGraphFlow } from "./components/LineageGraphFlow";
 import { I18nProvider, useI18n, useLanguageController, type LanguagePreference, type SupportedLanguage } from "./i18n";
 
 type WorkspaceView = "chat" | "documents" | "graph" | "mcp" | "settings";
@@ -96,8 +96,14 @@ const MODEL_LOGS_STORAGE_KEY = "sag:model-call-logs:v1";
 const MODEL_LOG_CURSOR_STORAGE_KEY = "sag:model-call-log-cursor:v1";
 const MAX_BROWSER_MODEL_LOGS = 200;
 const DOCUMENT_RESULT_PAGE_SIZE = 10;
+const ALL_RESULT_TYPES = "__all__";
+const UNCATEGORIZED_EVENT_TYPE = "__uncategorized__";
 const DEFAULT_SEARCH_QUERY_ZH = "基于当前项目资料检索";
 const DEFAULT_SEARCH_QUERY_EN = "Search current project documents";
+const LineageGraphFlow = lazy(async () => {
+  const module = await import("./components/LineageGraphFlow");
+  return { default: module.LineageGraphFlow };
+});
 
 export default function App() {
   const i18n = useLanguageController();
@@ -1944,6 +1950,8 @@ function ProjectDocumentsWorkspace(props: {
 }) {
   const { language, t } = useI18n();
   const [resultTitleQuery, setResultTitleQuery] = useState("");
+  const [eventCategoryFilter, setEventCategoryFilter] = useState(ALL_RESULT_TYPES);
+  const [entityTypeFilter, setEntityTypeFilter] = useState(ALL_RESULT_TYPES);
   const [resultPage, setResultPage] = useState(1);
   const searchableResultView = props.resultView === "chunks" || props.resultView === "events" || props.resultView === "entities";
   const normalizedResultTitleQuery = normalizeKeyword(resultTitleQuery);
@@ -1952,12 +1960,28 @@ function ProjectDocumentsWorkspace(props: {
     [normalizedResultTitleQuery, props.chunks]
   );
   const filteredEvents = useMemo(
-    () => filterByKeyword(props.events, normalizedResultTitleQuery, (event) => event.title),
-    [normalizedResultTitleQuery, props.events]
+    () => filterByKeyword(props.events, normalizedResultTitleQuery, (event) => event.title)
+      .filter((event) => eventCategoryFilter === ALL_RESULT_TYPES || eventCategoryKey(event) === eventCategoryFilter),
+    [eventCategoryFilter, normalizedResultTitleQuery, props.events]
   );
   const filteredEntities = useMemo(
-    () => filterByKeyword(props.entities, normalizedResultTitleQuery, (entity) => entity.name),
-    [normalizedResultTitleQuery, props.entities]
+    () => filterByKeyword(props.entities, normalizedResultTitleQuery, (entity) => entity.name)
+      .filter((entity) => entityTypeFilter === ALL_RESULT_TYPES || entity.type === entityTypeFilter),
+    [entityTypeFilter, normalizedResultTitleQuery, props.entities]
+  );
+  const eventCategoryOptions = useMemo(
+    () => countTypeOptions(props.events.map(eventCategoryKey)).map((option) => ({
+      ...option,
+      label: eventCategoryLabel(option.value, language)
+    })),
+    [language, props.events]
+  );
+  const entityTypeOptions = useMemo(
+    () => countTypeOptions(props.entities.map((entity) => entity.type)).map((option) => ({
+      ...option,
+      label: entityTypeLabel(option.value, language)
+    })),
+    [language, props.entities]
   );
   const activeResultCount = props.resultView === "chunks"
     ? filteredChunks.length
@@ -1990,7 +2014,12 @@ function ProjectDocumentsWorkspace(props: {
 
   useEffect(() => {
     setResultPage(1);
-  }, [normalizedResultTitleQuery, props.resultView, props.selectedDocumentId]);
+  }, [entityTypeFilter, eventCategoryFilter, normalizedResultTitleQuery, props.resultView, props.selectedDocumentId]);
+
+  useEffect(() => {
+    setEventCategoryFilter(ALL_RESULT_TYPES);
+    setEntityTypeFilter(ALL_RESULT_TYPES);
+  }, [props.selectedDocumentId]);
 
   useEffect(() => {
     if (resultPage > resultPageCount) {
@@ -2117,8 +2146,16 @@ function ProjectDocumentsWorkspace(props: {
                   query={resultTitleQuery}
                   totalCount={activeTotalCount}
                   matchedCount={activeResultCount}
+                  typeValue={props.resultView === "events" ? eventCategoryFilter : props.resultView === "entities" ? entityTypeFilter : undefined}
+                  typeOptions={props.resultView === "events" ? eventCategoryOptions : props.resultView === "entities" ? entityTypeOptions : undefined}
+                  allTypesLabel={props.resultView === "events" ? t("全部事件类型", "All event types") : t("全部实体类型", "All entity types")}
                   onQueryChange={setResultTitleQuery}
-                  onClear={() => setResultTitleQuery("")}
+                  onTypeChange={props.resultView === "events" ? setEventCategoryFilter : props.resultView === "entities" ? setEntityTypeFilter : undefined}
+                  onReset={() => {
+                    setResultTitleQuery("");
+                    if (props.resultView === "events") setEventCategoryFilter(ALL_RESULT_TYPES);
+                    if (props.resultView === "entities") setEntityTypeFilter(ALL_RESULT_TYPES);
+                  }}
                 />
               ) : null}
               {props.resultView === "overview" ? (
@@ -2126,10 +2163,10 @@ function ProjectDocumentsWorkspace(props: {
               ) : null}
               {props.resultView === "chunks" ? <ChunksPanel chunks={paginatedChunks} hasFilter={Boolean(normalizedResultTitleQuery)} /> : null}
               {props.resultView === "events" ? (
-                <EventsPanel events={paginatedEvents} hasFilter={Boolean(normalizedResultTitleQuery)} onOpenEvent={props.onOpenEvent} onOpenEntity={props.onOpenEntity} />
+                <EventsPanel events={paginatedEvents} hasFilter={Boolean(normalizedResultTitleQuery) || eventCategoryFilter !== ALL_RESULT_TYPES} onOpenEvent={props.onOpenEvent} onOpenEntity={props.onOpenEntity} />
               ) : null}
               {props.resultView === "entities" ? (
-                <EntitiesPanel entities={paginatedEntities} hasFilter={Boolean(normalizedResultTitleQuery)} onOpenEntity={props.onOpenEntity} />
+                <EntitiesPanel entities={paginatedEntities} hasFilter={Boolean(normalizedResultTitleQuery) || entityTypeFilter !== ALL_RESULT_TYPES} onOpenEntity={props.onOpenEntity} />
               ) : null}
               {searchableResultView && activeResultCount > DOCUMENT_RESULT_PAGE_SIZE ? (
                 <PaginationControls
@@ -2191,15 +2228,17 @@ function ProjectGraphWorkspace(props: {
     return (
       <section className="flex min-h-0 flex-1 p-2 md:p-4">
         <div className="min-h-0 flex-1">
-          <LineageGraphFlow
-            key={props.project.id}
-            graph={props.lineageGraph}
-            language={language}
-            loadNode={props.onLoadNode}
-            search={props.onSearch}
-            onOpenEvent={props.onOpenEvent}
-            onOpenEntity={props.onOpenEntity}
-          />
+          <Suspense fallback={<div className="flex h-full min-h-[560px] items-center justify-center border border-border"><Loader2 className="h-5 w-5 animate-spin text-muted-foreground" /></div>}>
+            <LineageGraphFlow
+              key={props.project.id}
+              graph={props.lineageGraph}
+              language={language}
+              loadNode={props.onLoadNode}
+              search={props.onSearch}
+              onOpenEvent={props.onOpenEvent}
+              onOpenEntity={props.onOpenEntity}
+            />
+          </Suspense>
         </div>
       </section>
     );
@@ -2514,13 +2553,17 @@ function ResultTitleSearch(props: {
   query: string;
   totalCount: number;
   matchedCount: number;
+  typeValue?: string;
+  typeOptions?: Array<{ value: string; label: string; count: number }>;
+  allTypesLabel: string;
   onQueryChange: (value: string) => void;
-  onClear: () => void;
+  onTypeChange?: (value: string) => void;
+  onReset: () => void;
 }) {
   const { t } = useI18n();
   return (
     <div className="mb-3 space-y-1.5">
-      <div className="flex items-center gap-2">
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
         <div className="relative min-w-0 flex-1">
           <Search className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
           <Input
@@ -2530,16 +2573,90 @@ function ResultTitleSearch(props: {
             placeholder={t(`按${props.label}标题搜索`, `Search ${props.label} titles`)}
           />
         </div>
-        {props.query.trim() ? (
-          <Button variant="ghost" size="sm" onClick={props.onClear}>{t("清空", "Clear")}</Button>
+        {props.typeOptions && props.typeValue && props.onTypeChange ? (
+          <div className="relative shrink-0 sm:w-56">
+            <ListFilter className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+            <select
+              className="h-9 w-full appearance-none rounded-md border border-input bg-background pl-8 pr-7 text-sm outline-none focus:ring-2 focus:ring-ring"
+              value={props.typeValue}
+              onChange={(event) => props.onTypeChange?.(event.target.value)}
+              aria-label={props.allTypesLabel}
+            >
+              <option value={ALL_RESULT_TYPES}>{props.allTypesLabel}</option>
+              {props.typeOptions.map((option) => (
+                <option key={option.value} value={option.value}>{option.label} ({option.count})</option>
+              ))}
+            </select>
+          </div>
+        ) : null}
+        {props.query.trim() || (props.typeValue && props.typeValue !== ALL_RESULT_TYPES) ? (
+          <Button variant="ghost" size="sm" onClick={props.onReset}>{t("重置", "Reset")}</Button>
         ) : null}
       </div>
       <div className="text-xs text-muted-foreground">
-        {props.query.trim()
+        {props.query.trim() || (props.typeValue && props.typeValue !== ALL_RESULT_TYPES)
           ? t(`匹配 ${props.matchedCount}/${props.totalCount}`, `Matched ${props.matchedCount}/${props.totalCount}`)
           : t(`共 ${props.totalCount} 条`, `${props.totalCount} total`)}
       </div>
     </div>
+  );
+}
+
+function countTypeOptions(values: string[]): Array<{ value: string; count: number }> {
+  const counts = new Map<string, number>();
+  for (const value of values) {
+    counts.set(value, (counts.get(value) ?? 0) + 1);
+  }
+  return [...counts.entries()]
+    .map(([value, count]) => ({ value, count }))
+    .sort((left, right) => right.count - left.count || left.value.localeCompare(right.value));
+}
+
+function eventCategoryKey(event: EventRecord): string {
+  return event.category?.trim() || UNCATEGORIZED_EVENT_TYPE;
+}
+
+function eventCategoryLabel(category: string, language: SupportedLanguage): string {
+  if (category === "TASK_PRODUCES_TABLE") return language === "zh" ? "任务产出表" : "Task produces table";
+  if (category === "TABLE_DATA_FLOW") return language === "zh" ? "表级数据流" : "Table data flow";
+  if (category === "SQL_TABLE_JOIN") return language === "zh" ? "表连接" : "Table join";
+  if (category === "TABLE_TO_COLUMN_LINEAGE") return language === "zh" ? "表到字段" : "Table to column";
+  if (category === "COLUMN_TO_COLUMN_LINEAGE") return language === "zh" ? "字段到字段" : "Column to column";
+  if (category === UNCATEGORIZED_EVENT_TYPE) return language === "zh" ? "未分类" : "Uncategorized";
+  return category.replaceAll("_", " ");
+}
+
+function entityTypeLabel(type: string, language: SupportedLanguage): string {
+  if (type === "task") return language === "zh" ? "任务" : "Task";
+  if (type === "table") return language === "zh" ? "表" : "Table";
+  if (type === "column") return language === "zh" ? "字段" : "Column";
+  return type;
+}
+
+function EventCategoryBadge({ category }: { category: string }) {
+  const { language } = useI18n();
+  const colorClass = category === "TASK_PRODUCES_TABLE"
+    ? "border-amber-200 bg-amber-50 text-amber-800"
+    : category === "TABLE_DATA_FLOW"
+      ? "border-cyan-200 bg-cyan-50 text-cyan-800"
+      : category === "SQL_TABLE_JOIN"
+        ? "border-fuchsia-200 bg-fuchsia-50 text-fuchsia-800"
+        : category === "TABLE_TO_COLUMN_LINEAGE"
+          ? "border-lime-200 bg-lime-50 text-lime-800"
+          : category === "COLUMN_TO_COLUMN_LINEAGE"
+            ? "border-violet-200 bg-violet-50 text-violet-800"
+            : "";
+  return <Badge className={cn("shrink-0", colorClass)}>{eventCategoryLabel(category, language)}</Badge>;
+}
+
+function EntityTypeBadge({ type }: { type: string }) {
+  const { language } = useI18n();
+  const dotClass = type === "task" ? "bg-amber-500" : type === "table" ? "bg-cyan-500" : type === "column" ? "bg-emerald-500" : "bg-slate-400";
+  return (
+    <span className="mt-1 flex items-center gap-1.5 text-xs text-muted-foreground">
+      <span className={cn("h-2 w-2 rounded-full", dotClass)} />
+      {entityTypeLabel(type, language)}
+    </span>
   );
 }
 
@@ -2625,9 +2742,12 @@ function EventsPanel(props: {
       {props.events.map((event) => (
         <Card key={event.id}>
           <CardContent className="space-y-2">
-            <button className="w-full text-left text-sm font-semibold hover:underline" onClick={() => props.onOpenEvent(event.id)}>
-              {event.title}
-            </button>
+            <div className="flex flex-wrap items-start gap-2">
+              <EventCategoryBadge category={eventCategoryKey(event)} />
+              <button className="min-w-0 flex-1 text-left text-sm font-semibold hover:underline" onClick={() => props.onOpenEvent(event.id)}>
+                {event.title}
+              </button>
+            </div>
             <p className="line-clamp-3 text-sm text-muted-foreground">{event.summary || event.content}</p>
             <div className="flex flex-wrap gap-1">
               {(event.entities ?? []).length === 0 ? (
@@ -2667,7 +2787,7 @@ function EntitiesPanel(props: {
           <div className="flex items-start justify-between gap-2">
             <div className="min-w-0">
               <div className="truncate text-sm font-semibold">{entity.name}</div>
-              <div className="text-xs text-muted-foreground">{entity.type}</div>
+              <EntityTypeBadge type={entity.type} />
             </div>
             <Badge>{t(`${entity.eventCount ?? 0} 事件`, `${entity.eventCount ?? 0} events`)}</Badge>
           </div>
@@ -3278,10 +3398,11 @@ function DetailDrawer(props: {
 }
 
 function EventDetailPanel({ detail, onOpenEntity }: { detail: EventDetailRecord; onOpenEntity: (entityId: string) => void }) {
-  const { t } = useI18n();
+  const { language, t } = useI18n();
   return (
     <div className="space-y-4">
       <PanelInfo label={t("所属文档", "Source document")} value={detail.document?.title ?? t("未知文档", "Unknown document")} />
+      <PanelInfo label={t("事件类型", "Event type")} value={eventCategoryLabel(eventCategoryKey(detail.event), language)} />
       <PanelInfo label={t("事件内容", "Event content")} value={detail.event.content || detail.event.summary} multiline />
       <PanelSection title={t("关联实体", "Related entities")}>
         <div className="flex flex-wrap gap-2">

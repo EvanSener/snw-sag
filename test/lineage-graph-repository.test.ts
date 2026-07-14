@@ -8,7 +8,7 @@ vi.mock("../src/db/pool.js", () => ({
   pool: db
 }));
 
-import { getLineageGraphPage } from "../src/db/repositories.js";
+import { getLineageGraphPage, listEventsByDocument } from "../src/db/repositories.js";
 
 describe("getLineageGraphPage", () => {
   beforeEach(() => {
@@ -16,7 +16,7 @@ describe("getLineageGraphPage", () => {
     db.query.mockResolvedValue({ rows: [] });
   });
 
-  it("loads only PRODUCES relations for the initial skeleton", async () => {
+  it("loads PRODUCES relations and inferred task dependencies for the initial skeleton", async () => {
     const result = await getLineageGraphPage({
       sourceId: "00000000-0000-0000-0000-000000000001",
       tenantId: "default",
@@ -25,7 +25,9 @@ describe("getLineageGraphPage", () => {
 
     const sql = normalizeSql(db.query.mock.calls[0][0]);
     expect(sql).toContain("from lineage_relations lr");
-    expect(sql).toContain("lr.relation_type = 'PRODUCES'");
+    expect(sql).toContain("task_dependencies as");
+    expect(sql).toContain("producer.source_entity_id <> flow.context_task_entity_id");
+    expect(sql).toContain("relation_type in ('PRODUCES', 'DEPENDS_ON')");
     expect(sql).toContain("limit $3");
     expect(result).toEqual({ available: false, nodes: [], edges: [], hasMore: false });
   });
@@ -92,6 +94,69 @@ describe("getLineageGraphPage", () => {
       contextTaskId: "task-context",
       contextTaskName: "build_b"
     });
+  });
+
+  it("returns inferred task-to-task dependency edges", async () => {
+    db.query.mockResolvedValueOnce({
+      rows: [{
+        id: "task-dependency:task-a:task-b",
+        source_entity_id: "task-a",
+        source_id: "project-1",
+        source_type: "task",
+        source_name: "build_a",
+        source_normalized_name: "build_a",
+        target_entity_id: "task-b",
+        target_type: "task",
+        target_name: "build_b",
+        target_normalized_name: "build_b",
+        relation_type: "DEPENDS_ON",
+        context_task_entity_id: null,
+        context_task_name: null,
+        event_id: "event-1",
+        evidence_count: 2
+      }]
+    });
+
+    const result = await getLineageGraphPage({
+      sourceId: "00000000-0000-0000-0000-000000000001",
+      tenantId: "default",
+      limit: 100
+    });
+
+    expect(result.nodes.map((node) => node.type)).toEqual(["task", "task"]);
+    expect(result.edges[0]).toMatchObject({
+      id: "task-dependency:task-a:task-b",
+      sourceId: "task-a",
+      targetId: "task-b",
+      type: "DEPENDS_ON",
+      evidenceCount: 2
+    });
+  });
+
+  it("exposes event categories in document results", async () => {
+    db.query.mockResolvedValueOnce({
+      rows: [{
+        id: "event-1",
+        source_id: "project-1",
+        document_id: "document-1",
+        chunk_id: "chunk-1",
+        title: "字段级血缘",
+        summary: "",
+        content: "column lineage",
+        category: "COLUMN_TO_COLUMN_LINEAGE",
+        rank: 1,
+        entity_count: 0,
+        entities: []
+      }]
+    });
+
+    const events = await listEventsByDocument({
+      documentId: "00000000-0000-0000-0000-000000000010",
+      tenantId: "default"
+    });
+
+    expect(normalizeSql(db.query.mock.calls[0][0])).toContain("e.category");
+    expect(events[0].category).toBe("COLUMN_TO_COLUMN_LINEAGE");
   });
 });
 

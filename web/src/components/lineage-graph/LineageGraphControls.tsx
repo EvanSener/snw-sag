@@ -5,8 +5,10 @@ import {
   EyeOff,
   Focus,
   Loader2,
+  Minus,
   Network,
   PanelLeftClose,
+  Plus,
   RotateCcw,
   SlidersHorizontal,
   Table2,
@@ -133,14 +135,18 @@ export function SelectedNodePanel(props: {
   language: SupportedLanguage;
   loading: boolean;
   expanded: boolean;
+  traversalDepth: number;
+  highlightedNodeCount: number;
+  highlightedEdgeCount: number;
   onFocus: () => void;
   onExpand: () => void;
+  onTraversalDepthChange: (depth: number) => void;
   onOpen: () => void;
   onClose: () => void;
 }) {
   const Icon = props.node.type === "task" ? Workflow : props.node.type === "table" ? Table2 : Columns3;
   return (
-    <aside className="absolute bottom-3 right-3 z-10 w-[min(340px,calc(100%-24px))] border border-slate-200 bg-white/96 p-3 text-slate-900 shadow-xl backdrop-blur-sm">
+    <aside data-testid="lineage-selected-node-panel" className="absolute bottom-3 right-3 z-10 w-[min(340px,calc(100%-24px))] border border-slate-200 bg-white/96 p-3 text-slate-900 shadow-xl backdrop-blur-sm">
       <div className="flex items-start gap-3">
         <span className="flex h-9 w-9 shrink-0 items-center justify-center border border-slate-200 bg-slate-50" style={{ color: ENTITY_COLORS[props.node.type] }}>
           <Icon className="h-4 w-4" />
@@ -153,6 +159,41 @@ export function SelectedNodePanel(props: {
         <PanelIconButton onClick={props.onClose} title={text(props.language, "关闭", "Close")}>
           <X className="h-4 w-4" />
         </PanelIconButton>
+      </div>
+      <div className="mt-3 flex items-center justify-between gap-3 border-t border-slate-200 pt-3">
+        <div className="min-w-0">
+          <div className="text-[11px] font-medium uppercase text-slate-500">{text(props.language, "穿透层级", "Traversal depth")}</div>
+          <div
+            data-testid="lineage-highlight-counts"
+            data-node-count={props.highlightedNodeCount}
+            data-edge-count={props.highlightedEdgeCount}
+            className="mt-0.5 text-[11px] text-slate-500"
+          >
+            {props.highlightedNodeCount} {text(props.language, "实体", "entities")} / {props.highlightedEdgeCount} {text(props.language, "关系", "relations")}
+          </div>
+        </div>
+        <div className="flex shrink-0 items-center gap-1">
+          <PanelIconButton
+            disabled={props.traversalDepth <= 1}
+            onClick={() => props.onTraversalDepthChange(props.traversalDepth - 1)}
+            title={text(props.language, "减少穿透层级", "Decrease traversal depth")}
+          >
+            <Minus className="h-3.5 w-3.5" />
+          </PanelIconButton>
+          <span
+            className="flex h-7 min-w-11 items-center justify-center border border-slate-200 bg-slate-50 px-2 text-xs font-semibold tabular-nums text-slate-700"
+            aria-label={text(props.language, `当前穿透 ${props.traversalDepth} 层`, `Current traversal depth ${props.traversalDepth}`)}
+          >
+            {props.traversalDepth} {text(props.language, "层", "hop")}
+          </span>
+          <PanelIconButton
+            disabled={props.traversalDepth >= 5}
+            onClick={() => props.onTraversalDepthChange(props.traversalDepth + 1)}
+            title={text(props.language, "增加穿透层级", "Increase traversal depth")}
+          >
+            <Plus className="h-3.5 w-3.5" />
+          </PanelIconButton>
+        </div>
       </div>
       <div className="mt-3 flex items-center gap-2 border-t border-slate-200 pt-3">
         <Button className="h-8 border-slate-300 bg-white text-xs text-slate-700 hover:bg-slate-50" variant="outline" size="sm" onClick={props.onFocus}>
@@ -218,6 +259,7 @@ function PanelIconButton(props: {
   className?: string;
   title: string;
   active?: boolean;
+  disabled?: boolean;
   onClick: () => void;
   children: ReactNode;
 }) {
@@ -227,8 +269,9 @@ function PanelIconButton(props: {
       title={props.title}
       aria-label={props.title}
       onClick={props.onClick}
+      disabled={props.disabled}
       className={cn(
-        "flex h-7 w-7 items-center justify-center border border-slate-200 text-slate-500 hover:border-slate-300 hover:bg-slate-50 hover:text-slate-900",
+        "flex h-7 w-7 items-center justify-center border border-slate-200 text-slate-500 hover:border-slate-300 hover:bg-slate-50 hover:text-slate-900 disabled:cursor-not-allowed disabled:opacity-35",
         props.active && "border-cyan-300 bg-cyan-50 text-cyan-700",
         props.className
       )}

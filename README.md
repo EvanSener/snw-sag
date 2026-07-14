@@ -117,7 +117,7 @@ Core features:
 - **Source citations**: answers can show numbered citations; click a number to view the original chunk.
 - **Search trace visualization**: the right panel shows SAG's internal retrieval steps and latency in real time.
 - **Raw logs**: browser cache stores raw LLM / Embedding / Rerank requests and responses.
-- **Knowledge graph**: explore ordinary event/entity graphs or lazily expand a white-canvas Three.js 3D lineage graph, with independent task/table/column node, label, and five relation-family visibility controls.
+- **Knowledge graph**: explore ordinary event/entity graphs or lazily expand a white-canvas Three.js 3D lineage graph, with independent task/table/column node, label, and five relation-family visibility controls plus 1-5-hop related-path highlighting.
 - **MCP integration**: each project exposes its own MCP configuration so external agents can call the current project directly.
 
 ## Tech Stack
@@ -134,11 +134,11 @@ In the Document tab, you can upload documents, inspect processing status, chunks
 
 ### Graph Exploration
 
-In the Graph tab, ordinary projects retain the entity-event view. Typed lineage projects use a rotatable 3D task/table/column graph with search, click-to-focus and one-hop expansion, details, fit-to-view, type colors, and independent controls for nodes, labels, and task-task/task-table/table-table/table-column/column-column relations.
+In the Graph tab, ordinary projects retain the entity-event view. Typed lineage projects use a rotatable 3D task/table/column graph with search, click-to-focus, 1-5-hop upstream/downstream traversal, incremental expansion, details, fit-to-view, type colors, and independent controls for nodes, labels, and task-task/task-table/table-table/table-column/column-column relations. Selecting an entity hides unrelated links and dims unrelated nodes until the selection is cleared.
 
 ![SAG graph view](docs/assets/sag-graph.png)
 
-The local visual smoke test can be repeated against a running server with `npm run verify:lineage-ui`; it checks document type filters, task dependencies, WebGL pixels, controls, and desktop/mobile overflow.
+The local visual smoke test can be repeated against a running server with `npm run verify:lineage-ui`; it checks document type filters, task dependencies, one/two-hop highlighting, selection reset, WebGL pixels, controls, and desktop/mobile overflow.
 
 ### Conversational Retrieval
 

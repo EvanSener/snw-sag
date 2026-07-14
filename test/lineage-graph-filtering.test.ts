@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  collectLineageNeighborhood,
   filterLineageGraph,
   relationKindForEdge,
   type LineageRelationKind
@@ -59,6 +60,39 @@ describe("lineage graph filtering", () => {
 
     expect(filtered.nodes.map((item) => item.id)).toEqual(["table-a", "table-b"]);
     expect(filtered.edges.map((item) => item.id)).toEqual(["table-table"]);
+  });
+
+  it("collects only the selected entity neighborhood up to the requested depth", () => {
+    const chain: LineageGraphRecord = {
+      available: true,
+      hasMore: false,
+      nodes: [
+        node("a", "task"),
+        node("b", "task"),
+        node("c", "task"),
+        node("d", "task"),
+        node("x", "task"),
+        node("y", "task")
+      ],
+      edges: [
+        edge("ab", "a", "b", "DEPENDS_ON"),
+        edge("bc", "b", "c", "DEPENDS_ON"),
+        edge("cd", "c", "d", "DEPENDS_ON"),
+        edge("xy", "x", "y", "DEPENDS_ON")
+      ]
+    };
+
+    const direct = collectLineageNeighborhood(chain, "b", 1);
+    expect([...direct.nodeIds].sort()).toEqual(["a", "b", "c"]);
+    expect([...direct.edgeIds].sort()).toEqual(["ab", "bc"]);
+
+    const indirect = collectLineageNeighborhood(chain, "b", 2);
+    expect([...indirect.nodeIds].sort()).toEqual(["a", "b", "c", "d"]);
+    expect([...indirect.edgeIds].sort()).toEqual(["ab", "bc", "cd"]);
+
+    const missing = collectLineageNeighborhood(chain, "missing", 2);
+    expect([...missing.nodeIds]).toEqual([]);
+    expect([...missing.edgeIds]).toEqual([]);
   });
 });
 

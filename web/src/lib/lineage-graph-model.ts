@@ -21,6 +21,43 @@ export interface LineageGraphFilters {
   relationKinds: ReadonlySet<LineageRelationKind>;
 }
 
+export interface LineageNeighborhood {
+  nodeIds: Set<string>;
+  edgeIds: Set<string>;
+}
+
+export function collectLineageNeighborhood(
+  graph: LineageGraphRecord,
+  selectedNodeId: string,
+  requestedDepth: number
+): LineageNeighborhood {
+  if (!graph.nodes.some((node) => node.id === selectedNodeId)) {
+    return { nodeIds: new Set(), edgeIds: new Set() };
+  }
+
+  const maxDepth = Math.max(1, Math.floor(requestedDepth));
+  const adjacency = new Map<string, Array<{ edgeId: string; neighborId: string }>>();
+  for (const edge of graph.edges) {
+    appendNeighbor(adjacency, edge.sourceId, edge.id, edge.targetId);
+    appendNeighbor(adjacency, edge.targetId, edge.id, edge.sourceId);
+  }
+
+  const nodeIds = new Set([selectedNodeId]);
+  const edgeIds = new Set<string>();
+  const queue: Array<{ nodeId: string; depth: number }> = [{ nodeId: selectedNodeId, depth: 0 }];
+  for (let index = 0; index < queue.length; index += 1) {
+    const current = queue[index];
+    if (current.depth >= maxDepth) continue;
+    for (const adjacent of adjacency.get(current.nodeId) ?? []) {
+      edgeIds.add(adjacent.edgeId);
+      if (nodeIds.has(adjacent.neighborId)) continue;
+      nodeIds.add(adjacent.neighborId);
+      queue.push({ nodeId: adjacent.neighborId, depth: current.depth + 1 });
+    }
+  }
+  return { nodeIds, edgeIds };
+}
+
 export function relationKindForEdge(
   edge: LineageGraphEdgeRecord,
   nodeTypes: ReadonlyMap<string, LineageEntityType>
@@ -85,4 +122,15 @@ export function mergeLineageGraphs(
     edges: [...edges.values()],
     hasMore: current.hasMore || page.hasMore || current.nodes.length + page.nodes.length > maxVisibleNodes
   };
+}
+
+function appendNeighbor(
+  adjacency: Map<string, Array<{ edgeId: string; neighborId: string }>>,
+  nodeId: string,
+  edgeId: string,
+  neighborId: string
+): void {
+  const neighbors = adjacency.get(nodeId) ?? [];
+  neighbors.push({ edgeId, neighborId });
+  adjacency.set(nodeId, neighbors);
 }

@@ -48,9 +48,12 @@ export function createLinkLabelObject(link: GraphLink, language: SupportedLangua
 
 export function positionLinkLabel(
   object: Object3D | undefined,
-  coordinates: { start: { x: number; y: number; z: number }; end: { x: number; y: number; z: number } }
+  coordinates: {
+    start?: { x: number; y: number; z: number };
+    end?: { x: number; y: number; z: number };
+  } | undefined
 ): boolean {
-  if (!object) return false;
+  if (!object || !coordinates?.start || !coordinates.end) return false;
   object.position.set(
     (coordinates.start.x + coordinates.end.x) / 2,
     (coordinates.start.y + coordinates.end.y) / 2,

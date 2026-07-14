@@ -19,10 +19,10 @@ import {
   SlidersHorizontal
 } from "lucide-react";
 import {
+  collectLineageNeighborhood,
   filterLineageGraph,
   LINEAGE_ENTITY_TYPES,
   LINEAGE_RELATION_KINDS,
-  mergeLineageGraphs,
   relationKindForEdge,
   type LineageEntityType,
   type LineageRelationKind
@@ -38,6 +38,7 @@ import {
   GraphIconButton,
   SelectedNodePanel
 } from "./lineage-graph/LineageGraphControls";
+import { loadLineageTraversal } from "./lineage-graph/traversal-loader";
 import type { GraphLink, GraphNode } from "./lineage-graph/types";
 import {
   ENTITY_COLORS,
@@ -51,6 +52,9 @@ import {
 } from "./lineage-graph/visuals";
 
 const MAX_VISIBLE_NODES = 500;
+const MAX_TRAVERSAL_REQUESTS = 40;
+const DEFAULT_TRAVERSAL_DEPTH = 1;
+const INACTIVE_NODE_COLOR = "#cbd5e1";
 const DEFAULT_ENTITY_VISIBILITY: Record<LineageEntityType, boolean> = {
   task: true,
   table: true,
@@ -84,12 +88,14 @@ export function LineageGraphFlow(props: {
   const [isSearching, setIsSearching] = useState(false);
   const [message, setMessage] = useState("");
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
+  const [traversalDepth, setTraversalDepth] = useState(DEFAULT_TRAVERSAL_DEPTH);
   const [entityVisibility, setEntityVisibility] = useState(DEFAULT_ENTITY_VISIBILITY);
   const [labelVisibility, setLabelVisibility] = useState(DEFAULT_LABEL_VISIBILITY);
   const [relationVisibility, setRelationVisibility] = useState(DEFAULT_RELATION_VISIBILITY);
   const [showRelationLabels, setShowRelationLabels] = useState(false);
   const [filtersOpen, setFiltersOpen] = useState(false);
   const graphRef = useRef<ForceGraphMethods<GraphNode, GraphLink> | undefined>(undefined);
+  const traversalRunRef = useRef(0);
   const canvasRef = useRef<HTMLDivElement>(null);
   const size = useElementSize(canvasRef);
 
@@ -112,6 +118,12 @@ export function LineageGraphFlow(props: {
     () => new Map(visibleGraph.nodes.map((node) => [node.id, node.type])),
     [visibleGraph.nodes]
   );
+  const selectedNeighborhood = useMemo(
+    () => selectedNodeId
+      ? collectLineageNeighborhood(filteredGraph, selectedNodeId, traversalDepth)
+      : null,
+    [filteredGraph, selectedNodeId, traversalDepth]
+  );
   const graphData = useMemo(() => ({
     nodes: filteredGraph.nodes.map((node) => ({ ...node } as GraphNode)),
     links: filteredGraph.edges.flatMap((edge) => {
@@ -131,11 +143,14 @@ export function LineageGraphFlow(props: {
     : null;
 
   useEffect(() => {
-    setVisibleGraph(props.graph);
+    traversalRunRef.current += 1;
+    const graph = props.graph;
+    setVisibleGraph(graph);
     setExpandedNodeIds(new Set());
     setLoadingNodeIds(new Set());
     setSelectedNodeId(null);
-    setMessage(props.graph.hasMore
+    setTraversalDepth(DEFAULT_TRAVERSAL_DEPTH);
+    setMessage(graph.hasMore
       ? text(props.language, "任务骨架已截断，请搜索后展开", "Task skeleton is capped; search to narrow it")
       : "");
   }, [props.graph, props.language]);
@@ -157,31 +172,61 @@ export function LineageGraphFlow(props: {
 
   useEffect(() => {
     if (selectedNodeId && !filteredGraph.nodes.some((node) => node.id === selectedNodeId)) {
+      traversalRunRef.current += 1;
       setSelectedNodeId(null);
+      setLoadingNodeIds(new Set());
     }
   }, [filteredGraph.nodes, selectedNodeId]);
 
-  const expandNode = useCallback(async (nodeId: string) => {
-    if (loadingNodeIds.has(nodeId) || expandedNodeIds.has(nodeId)) return;
-    setLoadingNodeIds((current) => new Set(current).add(nodeId));
+  const setNodeLoading = useCallback((nodeId: string, loading: boolean) => {
+    setLoadingNodeIds((current) => {
+      const next = new Set(current);
+      if (loading) next.add(nodeId);
+      else next.delete(nodeId);
+      return next;
+    });
+  }, []);
+
+  const traverseNode = useCallback(async (nodeId: string, depth: number) => {
+    const runId = traversalRunRef.current + 1;
+    traversalRunRef.current = runId;
+    setLoadingNodeIds(new Set());
     setMessage("");
     try {
-      const page = await props.loadNode(nodeId);
-      setVisibleGraph((current) => mergeLineageGraphs(current, page, MAX_VISIBLE_NODES));
-      setExpandedNodeIds((current) => new Set(current).add(nodeId));
-      if (page.hasMore) {
-        setMessage(text(props.language, "该节点关系较多，当前只显示前 200 条", "This node has more relations; showing the first 200"));
+      const result = await loadLineageTraversal({
+        graph: visibleGraph,
+        selectedNodeId: nodeId,
+        depth,
+        expandedNodeIds,
+        maxVisibleNodes: MAX_VISIBLE_NODES,
+        maxRequests: MAX_TRAVERSAL_REQUESTS,
+        loadNode: props.loadNode,
+        shouldContinue: () => traversalRunRef.current === runId,
+        onNodeLoading: (loadingNodeId, loading) => {
+          if (traversalRunRef.current === runId) setNodeLoading(loadingNodeId, loading);
+        },
+        onProgress: (graph, expanded) => {
+          if (traversalRunRef.current !== runId) return;
+          setVisibleGraph(graph);
+          setExpandedNodeIds(new Set(expanded));
+        }
+      });
+      if (result.cancelled || traversalRunRef.current !== runId) return;
+      setVisibleGraph(result.graph);
+      setExpandedNodeIds(result.expandedNodeIds);
+      if (result.truncated) {
+        setMessage(text(
+          props.language,
+          "穿透结果达到加载上限，已保留当前关联链路",
+          "Traversal reached the loading limit; the current related paths remain available"
+        ));
       }
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : String(error));
-    } finally {
-      setLoadingNodeIds((current) => {
-        const next = new Set(current);
-        next.delete(nodeId);
-        return next;
-      });
+      if (traversalRunRef.current === runId) {
+        setMessage(error instanceof Error ? error.message : String(error));
+      }
     }
-  }, [expandedNodeIds, loadingNodeIds, props]);
+  }, [expandedNodeIds, props.language, props.loadNode, setNodeLoading, visibleGraph]);
 
   const focusNode = useCallback((node: GraphNode) => {
     const x = node.x ?? 0;
@@ -195,11 +240,25 @@ export function LineageGraphFlow(props: {
     graphRef.current?.cameraPosition(camera, { x, y, z }, 700);
   }, []);
 
-  async function handleNodeClick(node: NodeObject<GraphNode>) {
+  function handleNodeClick(node: NodeObject<GraphNode>) {
     const graphNode = node as GraphNode;
-    setSelectedNodeId(graphNode.id);
-    focusNode(graphNode);
-    await expandNode(graphNode.id);
+    window.setTimeout(() => {
+      setSelectedNodeId(graphNode.id);
+      focusNode(graphNode);
+      void traverseNode(graphNode.id, traversalDepth);
+    }, 0);
+  }
+
+  function handleTraversalDepthChange(depth: number) {
+    const nextDepth = Math.min(5, Math.max(1, depth));
+    setTraversalDepth(nextDepth);
+    if (selectedNodeId) void traverseNode(selectedNodeId, nextDepth);
+  }
+
+  function clearSelection() {
+    traversalRunRef.current += 1;
+    setSelectedNodeId(null);
+    setLoadingNodeIds(new Set());
   }
 
   function handleLinkClick(link: LinkObject<GraphNode, GraphLink>) {
@@ -213,13 +272,16 @@ export function LineageGraphFlow(props: {
     event.preventDefault();
     const normalized = query.trim();
     if (!normalized || isSearching) return;
+    traversalRunRef.current += 1;
     setIsSearching(true);
+    setLoadingNodeIds(new Set());
     setMessage("");
     try {
       const page = await props.search(normalized);
       setVisibleGraph(page);
       setExpandedNodeIds(new Set());
       setSelectedNodeId(null);
+      setTraversalDepth(DEFAULT_TRAVERSAL_DEPTH);
       setMessage(page.nodes.length === 0
         ? text(props.language, "未找到匹配实体", "No matching entities")
         : page.hasMore
@@ -233,11 +295,15 @@ export function LineageGraphFlow(props: {
   }
 
   function resetGraph() {
+    traversalRunRef.current += 1;
+    const graph = props.graph;
     setQuery("");
-    setVisibleGraph(props.graph);
+    setVisibleGraph(graph);
     setExpandedNodeIds(new Set());
+    setLoadingNodeIds(new Set());
     setSelectedNodeId(null);
-    setMessage(props.graph.hasMore
+    setTraversalDepth(DEFAULT_TRAVERSAL_DEPTH);
+    setMessage(graph.hasMore
       ? text(props.language, "任务骨架已截断，请搜索后展开", "Task skeleton is capped; search to narrow it")
       : "");
   }
@@ -251,12 +317,15 @@ export function LineageGraphFlow(props: {
 
   const nodeThreeObject = useCallback((node: NodeObject<GraphNode>) => {
     const graphNode = node as GraphNode;
-    return createNodeLabelObject(graphNode, labelVisibility[graphNode.type]);
-  }, [labelVisibility]);
+    const isRelated = !selectedNeighborhood || selectedNeighborhood.nodeIds.has(graphNode.id);
+    return createNodeLabelObject(graphNode, labelVisibility[graphNode.type] && isRelated);
+  }, [labelVisibility, selectedNeighborhood]);
 
   const linkThreeObject = useCallback((link: LinkObject<GraphNode, GraphLink>) => {
-    return createLinkLabelObject(link as GraphLink, props.language, showRelationLabels);
-  }, [props.language, showRelationLabels]);
+    const graphLink = link as GraphLink;
+    const isRelated = !selectedNeighborhood || selectedNeighborhood.edgeIds.has(graphLink.id);
+    return createLinkLabelObject(graphLink, props.language, showRelationLabels && isRelated);
+  }, [props.language, selectedNeighborhood, showRelationLabels]);
 
   return (
     <div className="relative h-full min-h-[560px] overflow-hidden border border-slate-200 bg-white">
@@ -268,20 +337,30 @@ export function LineageGraphFlow(props: {
             width={size.width}
             height={size.height}
             backgroundColor="#ffffff"
-            controlType="orbit"
+            controlType="trackball"
             showNavInfo={false}
             nodeId="id"
-            nodeVal={(node) => Math.min(12, 2.8 + Math.log2(Math.max(1, (node as GraphNode).relationCount + 1)) * 1.5)}
-            nodeColor={(node) => ENTITY_COLORS[(node as GraphNode).type]}
+            nodeVal={(node) => {
+              const graphNode = node as GraphNode;
+              const value = Math.min(12, 2.8 + Math.log2(Math.max(1, graphNode.relationCount + 1)) * 1.5);
+              return graphNode.id === selectedNodeId ? Math.min(16, value * 1.35) : value;
+            }}
+            nodeColor={(node) => {
+              const graphNode = node as GraphNode;
+              return selectedNeighborhood && !selectedNeighborhood.nodeIds.has(graphNode.id)
+                ? INACTIVE_NODE_COLOR
+                : ENTITY_COLORS[graphNode.type];
+            }}
             nodeLabel={(node) => nodeTooltip(node as GraphNode, props.language)}
             nodeOpacity={0.94}
             nodeResolution={12}
             nodeThreeObject={nodeThreeObject}
             nodeThreeObjectExtend
             linkColor={(link) => RELATION_COLORS[(link as GraphLink).relationKind]}
+            linkVisibility={(link) => !selectedNeighborhood || selectedNeighborhood.edgeIds.has((link as GraphLink).id)}
             linkLabel={(link) => linkTooltip(link as GraphLink, props.language)}
             linkWidth={(link) => Math.min(2.4, 0.65 + Math.log2((link as GraphLink).evidenceCount + 1) * 0.4)}
-            linkOpacity={0.62}
+            linkOpacity={selectedNeighborhood ? 0.82 : 0.62}
             linkDirectionalArrowLength={3.2}
             linkDirectionalArrowRelPos={0.86}
             linkDirectionalArrowColor={(link) => RELATION_COLORS[(link as GraphLink).relationKind]}
@@ -295,12 +374,13 @@ export function LineageGraphFlow(props: {
             d3VelocityDecay={0.28}
             enableNodeDrag
             enableNavigationControls
-            onNodeClick={(node) => void handleNodeClick(node)}
+            onNodeClick={handleNodeClick}
             onNodeRightClick={(node, event) => {
               event.preventDefault();
               props.onOpenEntity(String((node as GraphNode).id));
             }}
             onLinkClick={handleLinkClick}
+            onBackgroundClick={() => window.setTimeout(clearSelection, 0)}
           />
         ) : null}
       </div>
@@ -361,15 +441,19 @@ export function LineageGraphFlow(props: {
         <SelectedNodePanel
           node={selectedNode}
           language={props.language}
-          loading={loadingNodeIds.has(selectedNode.id)}
+          loading={loadingNodeIds.size > 0}
           expanded={expandedNodeIds.has(selectedNode.id)}
+          traversalDepth={traversalDepth}
+          highlightedNodeCount={selectedNeighborhood?.nodeIds.size ?? 0}
+          highlightedEdgeCount={selectedNeighborhood?.edgeIds.size ?? 0}
           onFocus={() => {
             const runtimeNode = graphData.nodes.find((node) => node.id === selectedNode.id);
             if (runtimeNode) focusNode(runtimeNode);
           }}
-          onExpand={() => void expandNode(selectedNode.id)}
+          onExpand={() => void traverseNode(selectedNode.id, 1)}
+          onTraversalDepthChange={handleTraversalDepthChange}
           onOpen={() => props.onOpenEntity(selectedNode.id)}
-          onClose={() => setSelectedNodeId(null)}
+          onClose={clearSelection}
         />
       ) : null}
 
@@ -386,7 +470,7 @@ export function LineageGraphFlow(props: {
       ) : null}
 
       {message ? (
-        <div className="absolute bottom-3 left-1/2 z-10 max-w-[calc(100%-24px)] -translate-x-1/2 truncate border border-slate-200 bg-white/95 px-3 py-2 text-xs text-slate-700 shadow-lg" title={message}>
+        <div className={`absolute left-1/2 z-10 max-w-[calc(100%-24px)] -translate-x-1/2 truncate border border-slate-200 bg-white/95 px-3 py-2 text-xs text-slate-700 shadow-lg ${selectedNode ? "top-14" : "bottom-3"}`} title={message}>
           {message}
         </div>
       ) : null}

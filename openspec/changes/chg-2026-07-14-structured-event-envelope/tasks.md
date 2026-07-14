@@ -15,4 +15,4 @@
 
 - [x] 3.1 运行 `npm test`、`npm run typecheck`、`npm run build` 和 OpenSpec 检查。
 - [x] 3.2 使用真实 SQL 血缘文档完成 API/UI live 验收。
-- [ ] 3.3 提交并推送 `snw-sag`，等待远程 CI 通过。
+- [x] 3.3 提交并推送 `snw-sag`，等待远程 CI 通过。

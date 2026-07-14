@@ -6,17 +6,26 @@ import {
   useState,
   type FormEvent
 } from "react";
-import ForceGraph3D, {
-  type ForceGraphMethods,
-  type LinkObject,
-  type NodeObject
-} from "react-force-graph-3d";
+import {
+  Background,
+  BackgroundVariant,
+  Controls,
+  MarkerType,
+  MiniMap,
+  ReactFlow,
+  ReactFlowProvider,
+  useReactFlow,
+  type Edge,
+  type EdgeMouseHandler,
+  type NodeMouseHandler
+} from "@xyflow/react";
+import "@xyflow/react/dist/style.css";
 import {
   Loader2,
   Maximize2,
+  PanelLeftOpen,
   RotateCcw,
-  Search,
-  SlidersHorizontal
+  Search
 } from "lucide-react";
 import {
   collectLineageNeighborhood,
@@ -26,45 +35,46 @@ import {
   relationKindForEdge,
   type LineageEntityType,
   type LineageRelationKind
-} from "../lib/lineage-graph-model";
-import type {
-  LineageGraphRecord
-} from "../types";
-import type { SupportedLanguage } from "../i18n";
-import { Button } from "./ui/button";
-import { Input } from "./ui/input";
+} from "../lib/lineage-graph-model.js";
+import type { LineageGraphRecord } from "../types.js";
+import type { SupportedLanguage } from "../i18n.js";
+import { Input } from "./ui/input.js";
 import {
-  GraphFilterPanel,
+  buildLineageCanvasModel,
+  relationDisplayLabel,
+  type LineageCanvasEdge
+} from "./lineage-graph/canvas-model.js";
+import {
+  LineageCanvasNodeView,
+  type LineageFlowNode
+} from "./lineage-graph/LineageCanvasNodes.js";
+import {
   GraphIconButton,
-  SelectedNodePanel
-} from "./lineage-graph/LineageGraphControls";
-import { loadLineageTraversal } from "./lineage-graph/traversal-loader";
-import type { GraphLink, GraphNode } from "./lineage-graph/types";
+  LineageExplorerPanel,
+  LineageInspectorPanel,
+  type LineageInspectorRelation
+} from "./lineage-graph/LineageWorkbenchPanels.js";
+import { layoutLineageCanvas } from "./lineage-graph/layout.js";
 import {
   ENTITY_COLORS,
   RELATION_COLORS,
-  createLinkLabelObject,
-  createNodeLabelObject,
-  linkTooltip,
-  nodeTooltip,
-  positionLinkLabel,
   text
-} from "./lineage-graph/visuals";
+} from "./lineage-graph/palette.js";
+import { loadLineageTraversal } from "./lineage-graph/traversal-loader.js";
 
 const MAX_VISIBLE_NODES = 500;
 const MAX_TRAVERSAL_REQUESTS = 40;
 const DEFAULT_TRAVERSAL_DEPTH = 1;
-const INACTIVE_NODE_COLOR = "#cbd5e1";
+const MAX_COLLAPSED_COLUMNS = 6;
+const MAX_EXPANDED_COLUMNS = 18;
+const NODE_TYPES = { lineage: LineageCanvasNodeView };
+
 const DEFAULT_ENTITY_VISIBILITY: Record<LineageEntityType, boolean> = {
   task: true,
   table: true,
   column: true
 };
-const DEFAULT_LABEL_VISIBILITY: Record<LineageEntityType, boolean> = {
-  task: true,
-  table: false,
-  column: false
-};
+
 const DEFAULT_RELATION_VISIBILITY: Record<LineageRelationKind, boolean> = {
   "task-task": true,
   "task-table": true,
@@ -73,7 +83,25 @@ const DEFAULT_RELATION_VISIBILITY: Record<LineageRelationKind, boolean> = {
   "column-column": true
 };
 
+type LineageFlowEdgeData = LineageCanvasEdge & Record<string, unknown>;
+type LineageFlowEdge = Edge<LineageFlowEdgeData>;
+
 export function LineageGraphFlow(props: {
+  graph: LineageGraphRecord;
+  language: SupportedLanguage;
+  loadNode: (nodeId: string) => Promise<LineageGraphRecord>;
+  search: (query: string) => Promise<LineageGraphRecord>;
+  onOpenEvent: (eventId: string) => void;
+  onOpenEntity: (entityId: string) => void;
+}) {
+  return (
+    <ReactFlowProvider>
+      <LineageGraphWorkbench {...props} />
+    </ReactFlowProvider>
+  );
+}
+
+function LineageGraphWorkbench(props: {
   graph: LineageGraphRecord;
   language: SupportedLanguage;
   loadNode: (nodeId: string) => Promise<LineageGraphRecord>;
@@ -85,19 +113,20 @@ export function LineageGraphFlow(props: {
   const [query, setQuery] = useState("");
   const [loadingNodeIds, setLoadingNodeIds] = useState<Set<string>>(new Set());
   const [expandedNodeIds, setExpandedNodeIds] = useState<Set<string>>(new Set());
+  const [expandedTableIds, setExpandedTableIds] = useState<Set<string>>(new Set());
   const [isSearching, setIsSearching] = useState(false);
+  const [layoutPending, setLayoutPending] = useState(false);
   const [message, setMessage] = useState("");
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [traversalDepth, setTraversalDepth] = useState(DEFAULT_TRAVERSAL_DEPTH);
   const [entityVisibility, setEntityVisibility] = useState(DEFAULT_ENTITY_VISIBILITY);
-  const [labelVisibility, setLabelVisibility] = useState(DEFAULT_LABEL_VISIBILITY);
   const [relationVisibility, setRelationVisibility] = useState(DEFAULT_RELATION_VISIBILITY);
   const [showRelationLabels, setShowRelationLabels] = useState(false);
   const [filtersOpen, setFiltersOpen] = useState(false);
-  const graphRef = useRef<ForceGraphMethods<GraphNode, GraphLink> | undefined>(undefined);
+  const [positions, setPositions] = useState<Map<string, { x: number; y: number }>>(new Map());
   const traversalRunRef = useRef(0);
-  const canvasRef = useRef<HTMLDivElement>(null);
-  const size = useElementSize(canvasRef);
+  const layoutRunRef = useRef(0);
+  const { fitView } = useReactFlow<LineageFlowNode, LineageFlowEdge>();
 
   const visibleEntityTypes = useMemo(
     () => new Set(LINEAGE_ENTITY_TYPES.filter((type) => entityVisibility[type])),
@@ -124,20 +153,41 @@ export function LineageGraphFlow(props: {
       : null,
     [filteredGraph, selectedNodeId, traversalDepth]
   );
-  const graphData = useMemo(() => ({
-    nodes: filteredGraph.nodes.map((node) => ({ ...node } as GraphNode)),
-    links: filteredGraph.edges.flatMap((edge) => {
-      const relationKind = relationKindForEdge(edge, nodeTypes);
-      return relationKind === null
-        ? []
-        : [{
-            ...edge,
-            source: edge.sourceId,
-            target: edge.targetId,
-            relationKind
-          } satisfies GraphLink];
-    })
-  }), [filteredGraph.edges, filteredGraph.nodes, nodeTypes]);
+  const visibleCanvasModel = useMemo(
+    () => buildLineageCanvasModel(filteredGraph, {
+      expandedTableIds,
+      maxCollapsedColumns: MAX_COLLAPSED_COLUMNS,
+      maxExpandedColumns: MAX_EXPANDED_COLUMNS,
+      selectedNodeId,
+      neighborhood: selectedNeighborhood,
+      showRelationLabels,
+      language: props.language
+    }),
+    [expandedTableIds, filteredGraph, props.language, selectedNeighborhood, selectedNodeId, showRelationLabels]
+  );
+  const displayedCanvasNodes = useMemo(
+    () => selectedNeighborhood
+      ? visibleCanvasModel.nodes.filter((node) => node.related)
+      : visibleCanvasModel.nodes,
+    [selectedNeighborhood, visibleCanvasModel.nodes]
+  );
+  const displayedCanvasNodeIds = useMemo(
+    () => new Set(displayedCanvasNodes.map((node) => node.id)),
+    [displayedCanvasNodes]
+  );
+  const displayedCanvasEdges = useMemo(
+    () => visibleCanvasModel.edges.filter((edge) => (
+      displayedCanvasNodeIds.has(edge.source) && displayedCanvasNodeIds.has(edge.target)
+    )),
+    [displayedCanvasNodeIds, visibleCanvasModel.edges]
+  );
+  const layoutKey = useMemo(
+    () => [
+      displayedCanvasNodes.map((node) => `${node.id}:${node.width}:${node.height}`).join(","),
+      displayedCanvasEdges.map((edge) => `${edge.source}:${edge.target}`).sort().join(",")
+    ].join("|"),
+    [displayedCanvasEdges, displayedCanvasNodes]
+  );
   const selectedNode = selectedNodeId
     ? visibleGraph.nodes.find((node) => node.id === selectedNodeId) ?? null
     : null;
@@ -147,6 +197,7 @@ export function LineageGraphFlow(props: {
     const graph = props.graph;
     setVisibleGraph(graph);
     setExpandedNodeIds(new Set());
+    setExpandedTableIds(new Set());
     setLoadingNodeIds(new Set());
     setSelectedNodeId(null);
     setTraversalDepth(DEFAULT_TRAVERSAL_DEPTH);
@@ -156,19 +207,25 @@ export function LineageGraphFlow(props: {
   }, [props.graph, props.language]);
 
   useEffect(() => {
-    const timer = window.setTimeout(() => {
-      graphRef.current?.zoomToFit(650, 72);
-    }, 120);
-    return () => window.clearTimeout(timer);
-  }, [graphData.nodes.length, size.height, size.width]);
-
-  useEffect(() => {
-    const graph = graphRef.current;
-    if (!graph) return;
-    graph.d3Force("charge")?.strength?.(-110);
-    graph.d3Force("link")?.distance?.(58);
-    graph.d3ReheatSimulation();
-  }, [graphData.links.length, graphData.nodes.length]);
+    const runId = layoutRunRef.current + 1;
+    layoutRunRef.current = runId;
+    setLayoutPending(true);
+    void layoutLineageCanvas(displayedCanvasNodes, displayedCanvasEdges).then((result) => {
+      if (layoutRunRef.current !== runId) return;
+      setPositions(new Map(result.nodes.map((node) => [node.id, node.position])));
+      setLayoutPending(false);
+      if (result.degraded) {
+        setMessage(text(
+          props.language,
+          "自动布局已降级为稳定分层布局",
+          "Automatic layout fell back to the deterministic layered layout"
+        ));
+      }
+      window.requestAnimationFrame(() => {
+        void fitView({ padding: 0.16, duration: 420, maxZoom: 1.25 });
+      });
+    });
+  }, [fitView, layoutKey]);
 
   useEffect(() => {
     if (selectedNodeId && !filteredGraph.nodes.some((node) => node.id === selectedNodeId)) {
@@ -228,26 +285,89 @@ export function LineageGraphFlow(props: {
     }
   }, [expandedNodeIds, props.language, props.loadNode, setNodeLoading, visibleGraph]);
 
-  const focusNode = useCallback((node: GraphNode) => {
-    const x = node.x ?? 0;
-    const y = node.y ?? 0;
-    const z = node.z ?? 0;
-    const distance = Math.hypot(x, y, z);
-    const ratio = distance === 0 ? 1 : 1 + 90 / distance;
-    const camera = distance === 0
-      ? { x: 0, y: 0, z: 90 }
-      : { x: x * ratio, y: y * ratio, z: z * ratio };
-    graphRef.current?.cameraPosition(camera, { x, y, z }, 700);
+  const selectEntity = useCallback((nodeId: string) => {
+    setSelectedNodeId(nodeId);
+    setFiltersOpen(false);
+    void traverseNode(nodeId, traversalDepth);
+  }, [traversalDepth, traverseNode]);
+
+  const toggleTable = useCallback((tableId: string) => {
+    setExpandedTableIds((current) => {
+      const next = new Set(current);
+      if (next.has(tableId)) next.delete(tableId);
+      else next.add(tableId);
+      return next;
+    });
   }, []);
 
-  function handleNodeClick(node: NodeObject<GraphNode>) {
-    const graphNode = node as GraphNode;
-    window.setTimeout(() => {
-      setSelectedNodeId(graphNode.id);
-      focusNode(graphNode);
-      void traverseNode(graphNode.id, traversalDepth);
-    }, 0);
-  }
+  const flowNodes = useMemo<LineageFlowNode[]>(
+    () => displayedCanvasNodes.map((node, index) => ({
+      id: node.id,
+      type: "lineage",
+      position: positions.get(node.id) ?? { x: 40 + (index % 4) * 320, y: 72 + Math.floor(index / 4) * 140 },
+      data: {
+        ...node,
+        loading: loadingNodeIds.has(node.entityId)
+          || node.columns.some((column) => loadingNodeIds.has(column.id)),
+        language: props.language,
+        onSelectEntity: selectEntity,
+        onToggleTable: toggleTable
+      },
+      style: { width: node.width, height: node.height },
+      draggable: true,
+      selectable: true
+    })),
+    [displayedCanvasNodes, loadingNodeIds, positions, props.language, selectEntity, toggleTable]
+  );
+  const flowEdges = useMemo<LineageFlowEdge[]>(
+    () => displayedCanvasEdges.map((edge) => {
+      const color = RELATION_COLORS[edge.relationKind];
+      return {
+        id: edge.id,
+        source: edge.source,
+        target: edge.target,
+        sourceHandle: edge.sourceHandle,
+        targetHandle: edge.targetHandle,
+        type: "smoothstep",
+        data: { ...edge },
+        label: edge.showLabel ? edge.label : undefined,
+        labelStyle: { fill: "#334155", fontSize: 10, fontWeight: 600 },
+        labelBgStyle: { fill: "#ffffff", fillOpacity: 0.96, stroke: "#cbd5e1", strokeWidth: 0.7 },
+        labelBgPadding: [5, 3] as [number, number],
+        labelBgBorderRadius: 4,
+        style: {
+          stroke: color,
+          strokeWidth: Math.min(2.5, 1.15 + Math.log2(edge.evidenceCount + 1) * 0.3),
+          opacity: selectedNeighborhood ? 0.95 : 0.72
+        },
+        markerEnd: {
+          type: MarkerType.ArrowClosed,
+          color,
+          width: 15,
+          height: 15
+        },
+        selectable: true
+      };
+    }),
+    [displayedCanvasEdges, selectedNeighborhood]
+  );
+
+  const inspectorRelations = useMemo(
+    () => selectedNodeId
+      ? buildInspectorRelations(filteredGraph, selectedNodeId, props.language)
+      : [],
+    [filteredGraph, props.language, selectedNodeId]
+  );
+
+  const onNodeClick: NodeMouseHandler<LineageFlowNode> = (event, node) => {
+    event.stopPropagation();
+    selectEntity(node.data.entityId);
+  };
+  const onEdgeClick: EdgeMouseHandler<LineageFlowEdge> = (event, edge) => {
+    event.stopPropagation();
+    const eventId = edge.data?.eventId;
+    if (eventId) props.onOpenEvent(eventId);
+  };
 
   function handleTraversalDepthChange(depth: number) {
     const nextDepth = Math.min(5, Math.max(1, depth));
@@ -259,13 +379,6 @@ export function LineageGraphFlow(props: {
     traversalRunRef.current += 1;
     setSelectedNodeId(null);
     setLoadingNodeIds(new Set());
-  }
-
-  function handleLinkClick(link: LinkObject<GraphNode, GraphLink>) {
-    const graphLink = link as GraphLink;
-    if (graphLink.eventId) {
-      props.onOpenEvent(graphLink.eventId);
-    }
   }
 
   async function handleSearch(event: FormEvent) {
@@ -280,6 +393,7 @@ export function LineageGraphFlow(props: {
       const page = await props.search(normalized);
       setVisibleGraph(page);
       setExpandedNodeIds(new Set());
+      setExpandedTableIds(new Set());
       setSelectedNodeId(null);
       setTraversalDepth(DEFAULT_TRAVERSAL_DEPTH);
       setMessage(page.nodes.length === 0
@@ -300,6 +414,7 @@ export function LineageGraphFlow(props: {
     setQuery("");
     setVisibleGraph(graph);
     setExpandedNodeIds(new Set());
+    setExpandedTableIds(new Set());
     setLoadingNodeIds(new Set());
     setSelectedNodeId(null);
     setTraversalDepth(DEFAULT_TRAVERSAL_DEPTH);
@@ -310,186 +425,198 @@ export function LineageGraphFlow(props: {
 
   function resetFilters() {
     setEntityVisibility(DEFAULT_ENTITY_VISIBILITY);
-    setLabelVisibility(DEFAULT_LABEL_VISIBILITY);
     setRelationVisibility(DEFAULT_RELATION_VISIBILITY);
     setShowRelationLabels(false);
+    setTraversalDepth(DEFAULT_TRAVERSAL_DEPTH);
+    if (selectedNodeId) void traverseNode(selectedNodeId, DEFAULT_TRAVERSAL_DEPTH);
   }
 
-  const nodeThreeObject = useCallback((node: NodeObject<GraphNode>) => {
-    const graphNode = node as GraphNode;
-    const isRelated = !selectedNeighborhood || selectedNeighborhood.nodeIds.has(graphNode.id);
-    return createNodeLabelObject(graphNode, labelVisibility[graphNode.type] && isRelated);
-  }, [labelVisibility, selectedNeighborhood]);
+  function focusSelected() {
+    if (!selectedNodeId) return;
+    const canvasNodeId = visibleCanvasModel.ownerTableByColumnId.get(selectedNodeId) ?? selectedNodeId;
+    void fitView({
+      nodes: flowNodes.filter((node) => node.id === canvasNodeId),
+      padding: 0.8,
+      duration: 420,
+      maxZoom: 1.35
+    });
+  }
 
-  const linkThreeObject = useCallback((link: LinkObject<GraphNode, GraphLink>) => {
-    const graphLink = link as GraphLink;
-    const isRelated = !selectedNeighborhood || selectedNeighborhood.edgeIds.has(graphLink.id);
-    return createLinkLabelObject(graphLink, props.language, showRelationLabels && isRelated);
-  }, [props.language, selectedNeighborhood, showRelationLabels]);
+  const explorerProps = {
+    language: props.language,
+    nodeCount: filteredGraph.nodes.length,
+    edgeCount: filteredGraph.edges.length,
+    entityVisibility,
+    relationVisibility,
+    showRelationLabels,
+    traversalDepth,
+    onToggleEntity: (type: LineageEntityType) => setEntityVisibility((current) => ({ ...current, [type]: !current[type] })),
+    onToggleRelation: (kind: LineageRelationKind) => setRelationVisibility((current) => ({ ...current, [kind]: !current[kind] })),
+    onToggleRelationLabels: () => setShowRelationLabels((value) => !value),
+    onTraversalDepthChange: handleTraversalDepthChange,
+    onReset: resetFilters
+  };
+  const inspectorProps = {
+    language: props.language,
+    node: selectedNode,
+    nodeCount: filteredGraph.nodes.length,
+    edgeCount: filteredGraph.edges.length,
+    loading: loadingNodeIds.size > 0,
+    expanded: selectedNode ? expandedNodeIds.has(selectedNode.id) : false,
+    highlightedNodeCount: selectedNeighborhood?.nodeIds.size ?? filteredGraph.nodes.length,
+    highlightedEdgeCount: selectedNeighborhood?.edgeIds.size ?? filteredGraph.edges.length,
+    relations: inspectorRelations,
+    onFocus: focusSelected,
+    onExpand: () => selectedNodeId && void traverseNode(selectedNodeId, 1),
+    onOpen: () => selectedNodeId && props.onOpenEntity(selectedNodeId),
+    onOpenEvent: props.onOpenEvent,
+    onClose: clearSelection
+  };
 
   return (
-    <div className="relative h-full min-h-[560px] overflow-hidden border border-slate-200 bg-white">
-      <div ref={canvasRef} className="absolute inset-0">
-        {size.width > 0 && size.height > 0 ? (
-          <ForceGraph3D<GraphNode, GraphLink>
-            ref={graphRef}
-            graphData={graphData}
-            width={size.width}
-            height={size.height}
-            backgroundColor="#ffffff"
-            controlType="trackball"
-            showNavInfo={false}
-            nodeId="id"
-            nodeVal={(node) => {
-              const graphNode = node as GraphNode;
-              const value = Math.min(12, 2.8 + Math.log2(Math.max(1, graphNode.relationCount + 1)) * 1.5);
-              return graphNode.id === selectedNodeId ? Math.min(16, value * 1.35) : value;
-            }}
-            nodeColor={(node) => {
-              const graphNode = node as GraphNode;
-              return selectedNeighborhood && !selectedNeighborhood.nodeIds.has(graphNode.id)
-                ? INACTIVE_NODE_COLOR
-                : ENTITY_COLORS[graphNode.type];
-            }}
-            nodeLabel={(node) => nodeTooltip(node as GraphNode, props.language)}
-            nodeOpacity={0.94}
-            nodeResolution={12}
-            nodeThreeObject={nodeThreeObject}
-            nodeThreeObjectExtend
-            linkColor={(link) => RELATION_COLORS[(link as GraphLink).relationKind]}
-            linkVisibility={(link) => !selectedNeighborhood || selectedNeighborhood.edgeIds.has((link as GraphLink).id)}
-            linkLabel={(link) => linkTooltip(link as GraphLink, props.language)}
-            linkWidth={(link) => Math.min(2.4, 0.65 + Math.log2((link as GraphLink).evidenceCount + 1) * 0.4)}
-            linkOpacity={selectedNeighborhood ? 0.82 : 0.62}
-            linkDirectionalArrowLength={3.2}
-            linkDirectionalArrowRelPos={0.86}
-            linkDirectionalArrowColor={(link) => RELATION_COLORS[(link as GraphLink).relationKind]}
-            linkCurvature={(link) => (link as GraphLink).type.endsWith("JOIN") ? 0.08 : 0}
-            linkThreeObject={linkThreeObject}
-            linkThreeObjectExtend
-            linkPositionUpdate={positionLinkLabel}
-            cooldownTicks={180}
-            cooldownTime={4500}
-            d3AlphaDecay={0.035}
-            d3VelocityDecay={0.28}
-            enableNodeDrag
-            enableNavigationControls
-            onNodeClick={handleNodeClick}
-            onNodeRightClick={(node, event) => {
-              event.preventDefault();
-              props.onOpenEntity(String((node as GraphNode).id));
-            }}
-            onLinkClick={handleLinkClick}
-            onBackgroundClick={() => window.setTimeout(clearSelection, 0)}
+    <div
+      data-testid="lineage-2d-workbench"
+      className="relative flex h-full min-h-[600px] overflow-hidden border border-slate-200 bg-white"
+    >
+      <LineageExplorerPanel variant="rail" {...explorerProps} />
+
+      <main className="relative min-w-0 flex-1 bg-white" data-testid="lineage-canvas">
+        <ReactFlow<LineageFlowNode, LineageFlowEdge>
+          className="lineage-flow"
+          nodes={flowNodes}
+          edges={flowEdges}
+          nodeTypes={NODE_TYPES}
+          onNodeClick={onNodeClick}
+          onNodeDoubleClick={(event, node) => {
+            event.stopPropagation();
+            props.onOpenEntity(node.data.entityId);
+          }}
+          onEdgeClick={onEdgeClick}
+          onPaneClick={clearSelection}
+          fitView
+          fitViewOptions={{ padding: 0.16, maxZoom: 1.25 }}
+          minZoom={0.08}
+          maxZoom={2.2}
+          nodesConnectable={false}
+          nodesDraggable
+          elementsSelectable
+          proOptions={{ hideAttribution: true }}
+        >
+          <Background variant={BackgroundVariant.Dots} gap={22} size={1} color="#dbe2ea" />
+          <Controls position="bottom-left" showInteractive={false} />
+          <MiniMap
+            position="bottom-right"
+            pannable
+            zoomable
+            nodeColor={(node) => ENTITY_COLORS[(node.data as unknown as LineageFlowNode["data"]).kind]}
+            nodeStrokeColor="#ffffff"
+            nodeStrokeWidth={2}
+            maskColor="rgba(248, 250, 252, 0.78)"
+            className="!hidden !rounded !border !border-slate-200 !bg-white !shadow-sm md:!block"
+          />
+        </ReactFlow>
+
+        <div className="pointer-events-none absolute inset-x-3 top-3 z-10 flex items-start gap-2">
+          <form className="pointer-events-auto flex min-w-0 flex-1 gap-1.5 md:max-w-2xl" onSubmit={(event) => void handleSearch(event)}>
+            <GraphIconButton
+              title={text(props.language, "显示筛选", "Show filters")}
+              active={filtersOpen}
+              onClick={() => setFiltersOpen((value) => !value)}
+            >
+              <PanelLeftOpen className="h-4 w-4" />
+            </GraphIconButton>
+            <div className="relative min-w-0 flex-1">
+              <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+              <Input
+                value={query}
+                onChange={(event) => setQuery(event.target.value)}
+                className="h-9 rounded border-slate-300 bg-white pl-9 text-slate-900 shadow-sm placeholder:text-slate-400 focus-visible:ring-sky-600"
+                placeholder={text(props.language, "搜索任务、表或字段", "Search tasks, tables, or columns")}
+                aria-label={text(props.language, "搜索血缘实体", "Search lineage entities")}
+              />
+            </div>
+            <GraphIconButton type="submit" disabled={!query.trim() || isSearching} title={text(props.language, "搜索", "Search")}>
+              {isSearching ? <Loader2 className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />}
+            </GraphIconButton>
+            <GraphIconButton onClick={resetGraph} title={text(props.language, "恢复任务骨架", "Reset to task skeleton")}>
+              <RotateCcw className="h-4 w-4" />
+            </GraphIconButton>
+            <GraphIconButton onClick={() => void fitView({ padding: 0.16, duration: 420, maxZoom: 1.25 })} title={text(props.language, "适配视图", "Fit view")}>
+              <Maximize2 className="h-4 w-4" />
+            </GraphIconButton>
+          </form>
+
+          <div className="pointer-events-auto hidden h-9 items-center gap-2 rounded border border-slate-200 bg-white px-3 text-[10px] font-medium text-slate-500 shadow-sm 2xl:flex">
+            {layoutPending ? <Loader2 className="h-3.5 w-3.5 animate-spin text-sky-700" /> : null}
+            <span className="tabular-nums">{displayedCanvasNodes.length} {text(props.language, "节点", "nodes")}</span>
+            <span className="text-slate-300">/</span>
+            <span className="tabular-nums">{displayedCanvasEdges.length} {text(props.language, "关系", "relations")}</span>
+          </div>
+        </div>
+
+        {filtersOpen ? (
+          <LineageExplorerPanel
+            variant="overlay"
+            {...explorerProps}
+            onClose={() => setFiltersOpen(false)}
           />
         ) : null}
-      </div>
 
-      <div className="pointer-events-none absolute inset-x-2 top-2 z-10 flex items-start gap-2 md:inset-x-3 md:top-3">
-        <form className="pointer-events-auto flex min-w-0 flex-1 gap-1.5 md:max-w-xl" onSubmit={(event) => void handleSearch(event)}>
-          <div className="relative min-w-0 flex-1">
-            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-            <Input
-              value={query}
-              onChange={(event) => setQuery(event.target.value)}
-              className="h-9 border-slate-300 bg-white/95 pl-9 text-slate-900 shadow-sm placeholder:text-slate-400 focus-visible:ring-cyan-600"
-              placeholder={text(props.language, "搜索任务、表或字段", "Search tasks, tables, or columns")}
-              aria-label={text(props.language, "搜索血缘实体", "Search lineage entities")}
-            />
-          </div>
-          <GraphIconButton
-            type="submit"
-            disabled={!query.trim() || isSearching}
-            title={text(props.language, "搜索", "Search")}
-          >
-            {isSearching ? <Loader2 className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />}
-          </GraphIconButton>
-          <GraphIconButton type="button" onClick={resetGraph} title={text(props.language, "恢复任务骨架", "Reset to task skeleton")}>
-            <RotateCcw className="h-4 w-4" />
-          </GraphIconButton>
-          <GraphIconButton type="button" onClick={() => graphRef.current?.zoomToFit(650, 72)} title={text(props.language, "适配视图", "Fit view")}>
-            <Maximize2 className="h-4 w-4" />
-          </GraphIconButton>
-          <GraphIconButton type="button" onClick={() => setFiltersOpen((value) => !value)} title={text(props.language, "显示筛选", "Display filters")}>
-            <SlidersHorizontal className="h-4 w-4" />
-          </GraphIconButton>
-        </form>
+        {selectedNode ? <LineageInspectorPanel variant="overlay" {...inspectorProps} /> : null}
 
-        <div className="pointer-events-auto hidden h-9 items-center gap-2 border border-slate-200 bg-white/95 px-3 text-xs text-slate-600 shadow-sm lg:flex">
-          <span>{filteredGraph.nodes.length}/{visibleGraph.nodes.length} {text(props.language, "实体", "entities")}</span>
-          <span className="text-slate-300">/</span>
-          <span>{filteredGraph.edges.length}/{visibleGraph.edges.length} {text(props.language, "关系", "relations")}</span>
-        </div>
-      </div>
-
-      <GraphFilterPanel
-        className={filtersOpen ? "block" : "hidden"}
-        language={props.language}
-        entityVisibility={entityVisibility}
-        labelVisibility={labelVisibility}
-        relationVisibility={relationVisibility}
-        showRelationLabels={showRelationLabels}
-        onToggleEntity={(type) => setEntityVisibility((current) => ({ ...current, [type]: !current[type] }))}
-        onToggleLabel={(type) => setLabelVisibility((current) => ({ ...current, [type]: !current[type] }))}
-        onToggleRelation={(kind) => setRelationVisibility((current) => ({ ...current, [kind]: !current[kind] }))}
-        onToggleRelationLabels={() => setShowRelationLabels((value) => !value)}
-        onReset={resetFilters}
-        onClose={() => setFiltersOpen(false)}
-      />
-
-      {selectedNode ? (
-        <SelectedNodePanel
-          node={selectedNode}
-          language={props.language}
-          loading={loadingNodeIds.size > 0}
-          expanded={expandedNodeIds.has(selectedNode.id)}
-          traversalDepth={traversalDepth}
-          highlightedNodeCount={selectedNeighborhood?.nodeIds.size ?? 0}
-          highlightedEdgeCount={selectedNeighborhood?.edgeIds.size ?? 0}
-          onFocus={() => {
-            const runtimeNode = graphData.nodes.find((node) => node.id === selectedNode.id);
-            if (runtimeNode) focusNode(runtimeNode);
-          }}
-          onExpand={() => void traverseNode(selectedNode.id, 1)}
-          onTraversalDepthChange={handleTraversalDepthChange}
-          onOpen={() => props.onOpenEntity(selectedNode.id)}
-          onClose={clearSelection}
-        />
-      ) : null}
-
-      {filteredGraph.nodes.length === 0 ? (
-        <div className="absolute inset-0 z-[5] flex items-center justify-center px-6">
-          <div className="border border-slate-200 bg-white/95 px-4 py-3 text-center text-sm text-slate-700 shadow-lg">
-            <div>{text(props.language, "当前筛选隐藏了所有实体", "Current filters hide all entities")}</div>
-            <Button className="mt-3" size="sm" variant="outline" onClick={resetFilters}>
-              <RotateCcw className="h-4 w-4" />
+        {filteredGraph.nodes.length === 0 ? (
+          <div className="absolute inset-0 z-[5] flex items-center justify-center px-6">
+            <button
+              type="button"
+              className="rounded border border-slate-200 bg-white px-4 py-3 text-xs font-medium text-slate-700 shadow-lg hover:bg-slate-50"
+              onClick={resetFilters}
+            >
+              <RotateCcw className="mr-2 inline h-3.5 w-3.5" />
               {text(props.language, "恢复筛选", "Reset filters")}
-            </Button>
+            </button>
           </div>
-        </div>
-      ) : null}
+        ) : null}
 
-      {message ? (
-        <div className={`absolute left-1/2 z-10 max-w-[calc(100%-24px)] -translate-x-1/2 truncate border border-slate-200 bg-white/95 px-3 py-2 text-xs text-slate-700 shadow-lg ${selectedNode ? "top-14" : "bottom-3"}`} title={message}>
-          {message}
-        </div>
-      ) : null}
+        {message ? (
+          <div className="absolute bottom-3 left-1/2 z-10 max-w-[calc(100%-24px)] -translate-x-1/2 truncate rounded border border-slate-200 bg-white px-3 py-2 text-[10px] text-slate-600 shadow-lg" title={message}>
+            {message}
+          </div>
+        ) : null}
+      </main>
+
+      <LineageInspectorPanel variant="rail" {...inspectorProps} />
     </div>
   );
 }
 
-function useElementSize(ref: React.RefObject<HTMLElement | null>) {
-  const [size, setSize] = useState({ width: 0, height: 0 });
-  useEffect(() => {
-    const element = ref.current;
-    if (!element) return;
-    const observer = new ResizeObserver(([entry]) => {
-      const width = Math.max(1, Math.floor(entry.contentRect.width));
-      const height = Math.max(1, Math.floor(entry.contentRect.height));
-      setSize((current) => current.width === width && current.height === height ? current : { width, height });
-    });
-    observer.observe(element);
-    return () => observer.disconnect();
-  }, [ref]);
-  return size;
+function buildInspectorRelations(
+  graph: LineageGraphRecord,
+  selectedNodeId: string,
+  language: SupportedLanguage
+): LineageInspectorRelation[] {
+  const nodeById = new Map(graph.nodes.map((node) => [node.id, node]));
+  const nodeTypes = new Map(graph.nodes.map((node) => [node.id, node.type]));
+  return graph.edges.flatMap((edge) => {
+    const incoming = edge.targetId === selectedNodeId;
+    const outgoing = edge.sourceId === selectedNodeId;
+    if (!incoming && !outgoing) return [];
+    const otherId = incoming ? edge.sourceId : edge.targetId;
+    const other = nodeById.get(otherId);
+    const relationKind = relationKindForEdge(edge, nodeTypes);
+    if (!other || !relationKind) return [];
+    return [{
+      id: edge.id,
+      direction: incoming ? "incoming" as const : "outgoing" as const,
+      label: relationDisplayLabel(edge.type, language),
+      otherName: other.name,
+      evidenceCount: edge.evidenceCount,
+      eventId: edge.eventId ?? null,
+      color: RELATION_COLORS[relationKind]
+    }];
+  }).sort(compareInspectorRelations).slice(0, 16);
+}
+
+function compareInspectorRelations(left: LineageInspectorRelation, right: LineageInspectorRelation): number {
+  if (left.direction !== right.direction) return left.direction === "incoming" ? -1 : 1;
+  return left.label.localeCompare(right.label) || left.otherName.localeCompare(right.otherName);
 }

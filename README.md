@@ -117,12 +117,12 @@ Core features:
 - **Source citations**: answers can show numbered citations; click a number to view the original chunk.
 - **Search trace visualization**: the right panel shows SAG's internal retrieval steps and latency in real time.
 - **Raw logs**: browser cache stores raw LLM / Embedding / Rerank requests and responses.
-- **Knowledge graph**: explore ordinary event/entity graphs or lazily expand a white-canvas Three.js 3D lineage graph, with independent task/table/column node, label, and five relation-family visibility controls plus 1-5-hop related-path highlighting.
+- **Knowledge graph**: explore ordinary event/entity graphs or lazily expand a white-canvas React Flow lineage workbench, with semantic task/table/field nodes, five relation-family visibility controls, directional edges, and 1-5-hop focused subgraphs.
 - **MCP integration**: each project exposes its own MCP configuration so external agents can call the current project directly.
 
 ## Tech Stack
 
-SAG uses TypeScript across the stack. The frontend is a React + Vite + Tailwind CSS WebUI; typed lineage uses a lazily loaded Three.js/WebGL force graph. The backend uses Fastify HTTP APIs, the MCP TypeScript SDK, and layered service modules. The data layer uses PostgreSQL, pgvector, full-text search, and SQL multi-hop queries. Model providers are OpenAI-compatible LLM, Embedding, and Rerank APIs.
+SAG uses TypeScript across the stack. The frontend is a React + Vite + Tailwind CSS WebUI; typed lineage uses a lazily loaded React Flow canvas with ELK layered layout. The backend uses Fastify HTTP APIs, the MCP TypeScript SDK, and layered service modules. The data layer uses PostgreSQL, pgvector, full-text search, and SQL multi-hop queries. Model providers are OpenAI-compatible LLM, Embedding, and Rerank APIs.
 
 ## Workbench Preview
 
@@ -134,11 +134,11 @@ In the Document tab, you can upload documents, inspect processing status, chunks
 
 ### Graph Exploration
 
-In the Graph tab, ordinary projects retain the entity-event view. Typed lineage projects use a rotatable 3D task/table/column graph with search, click-to-focus, 1-5-hop upstream/downstream traversal, incremental expansion, details, fit-to-view, type colors, and independent controls for nodes, labels, and task-task/task-table/table-table/table-column/column-column relations. Selecting an entity hides unrelated links and dims unrelated nodes until the selection is cleared.
+In the Graph tab, ordinary projects retain the entity-event view. Typed lineage projects use a white 2D task/table/column workbench with search, click-to-focus, 1-5-hop upstream/downstream traversal, incremental expansion, details, fit-to-view, type colors, and independent controls for task-task/task-table/table-table/table-column/column-column relations. Fields are grouped into their owning table cards through explicit `HAS_COLUMN` relations. Selecting an entity lays out only the active traversal subgraph until the selection is cleared.
 
 ![SAG graph view](docs/assets/sag-graph.png)
 
-The local visual smoke test can be repeated against a running server with `npm run verify:lineage-ui`; it checks document type filters, task dependencies, one/two-hop highlighting, selection reset, WebGL pixels, controls, and desktop/mobile overflow.
+The local visual smoke test can be repeated against a running server with `npm run verify:lineage-ui`; it checks document type filters, task dependencies, one/two-hop traversal, semantic table/field nodes, directional arrows, white-canvas pixels, controls, and desktop/mobile overflow.
 
 ### Conversational Retrieval
 
@@ -393,6 +393,8 @@ migrations/           PostgreSQL schema
 test/                 Unit tests
 docs/assets/          README screenshots and diagrams
 ```
+
+The SQL-specific architecture comparison with GitNexus and codegraph is documented in [SQL CodeGraph architecture assessment](docs/sql-codegraph-architecture-assessment.md).
 
 ## FAQ
 

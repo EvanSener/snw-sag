@@ -16,6 +16,7 @@ import type {
   McpMessageRole,
   McpSessionRecord,
   McpToolCallRecord,
+  LineageGraphRecord,
   ProjectGraphEntityRecord,
   ProjectGraphEventRecord,
   ProjectGraphRecord,
@@ -1087,6 +1088,202 @@ export async function getProjectGraph(input: {
   })));
 
   return { entities, events, edges };
+}
+
+export async function getLineageGraphPage(input: {
+  sourceId: string;
+  tenantId: string;
+  nodeId?: string;
+  query?: string;
+  limit: number;
+}): Promise<LineageGraphRecord> {
+  const requestedLimit = Math.max(1, input.limit);
+  if (input.query?.trim()) {
+    const result = await pool.query(
+      `
+        select
+          ent.id,
+          ent.source_id,
+          ent.type,
+          ent.name,
+          ent.normalized_name,
+          count(distinct lr.id)::int as relation_count
+        from entities ent
+        join sources s on s.id = ent.source_id
+        join lineage_relations lr
+          on lr.source_id = ent.source_id
+         and (
+           lr.source_entity_id = ent.id
+           or lr.target_entity_id = ent.id
+           or lr.context_task_entity_id = ent.id
+         )
+        join events e on e.id = lr.event_id
+        join documents d on d.id = e.document_id
+        where ent.source_id = $1
+          and s.tenant_id = $2
+          and s.archived_at is null
+          and d.archived_at is null
+          and e.deleted_at is null
+          and ent.normalized_name ilike $3
+        group by ent.id
+        order by ent.normalized_name, ent.type
+        limit $4
+      `,
+      [input.sourceId, input.tenantId, `%${input.query.trim().toLowerCase()}%`, requestedLimit + 1]
+    );
+    const hasMore = result.rows.length > requestedLimit;
+    const nodes = result.rows.slice(0, requestedLimit).map(lineageNodeFromRow);
+    return {
+      available: nodes.length > 0 || await hasTypedLineageRelations(input),
+      nodes,
+      edges: [],
+      hasMore
+    };
+  }
+
+  const nodeFilter = input.nodeId
+    ? `and (
+         lr.source_entity_id = $3
+         or lr.target_entity_id = $3
+         or lr.context_task_entity_id = $3
+       )`
+    : "and lr.relation_type = 'PRODUCES'";
+  const limitParameter = input.nodeId ? "$4" : "$3";
+  const parameters = input.nodeId
+    ? [input.sourceId, input.tenantId, input.nodeId, requestedLimit + 1]
+    : [input.sourceId, input.tenantId, requestedLimit + 1];
+  const result = await pool.query(
+    `
+      select
+        min(lr.id::text) as id,
+        lr.source_entity_id,
+        source_ent.source_id,
+        source_ent.type as source_type,
+        source_ent.name as source_name,
+        source_ent.normalized_name as source_normalized_name,
+        lr.target_entity_id,
+        target_ent.type as target_type,
+        target_ent.name as target_name,
+        target_ent.normalized_name as target_normalized_name,
+        lr.relation_type,
+        lr.context_task_entity_id,
+        context_ent.name as context_task_name,
+        min(lr.event_id::text) as event_id,
+        count(*)::int as evidence_count
+      from lineage_relations lr
+      join entities source_ent on source_ent.id = lr.source_entity_id
+      join entities target_ent on target_ent.id = lr.target_entity_id
+      left join entities context_ent on context_ent.id = lr.context_task_entity_id
+      join events e on e.id = lr.event_id
+      join documents d on d.id = e.document_id
+      join sources s on s.id = lr.source_id
+      where lr.source_id = $1
+        and s.tenant_id = $2
+        and s.archived_at is null
+        and d.archived_at is null
+        and e.deleted_at is null
+        ${nodeFilter}
+      group by
+        lr.source_entity_id,
+        source_ent.source_id,
+        source_ent.type,
+        source_ent.name,
+        source_ent.normalized_name,
+        lr.target_entity_id,
+        target_ent.type,
+        target_ent.name,
+        target_ent.normalized_name,
+        lr.relation_type,
+        lr.context_task_entity_id,
+        context_ent.name
+      order by source_ent.type, source_ent.name, lr.relation_type, target_ent.type, target_ent.name
+      limit ${limitParameter}
+    `,
+    parameters
+  );
+  const hasMore = result.rows.length > requestedLimit;
+  const rows = result.rows.slice(0, requestedLimit);
+  const nodes = new Map<string, ReturnType<typeof lineageNodeFromRow>>();
+  const edges = rows.map((row) => {
+    addLineageNode(nodes, {
+      id: row.source_entity_id,
+      source_id: row.source_id,
+      type: row.source_type,
+      name: row.source_name,
+      normalized_name: row.source_normalized_name,
+      relation_count: row.evidence_count
+    });
+    addLineageNode(nodes, {
+      id: row.target_entity_id,
+      source_id: row.source_id,
+      type: row.target_type,
+      name: row.target_name,
+      normalized_name: row.target_normalized_name,
+      relation_count: row.evidence_count
+    });
+    return {
+      id: String(row.id),
+      sourceId: String(row.source_entity_id),
+      targetId: String(row.target_entity_id),
+      type: String(row.relation_type),
+      contextTaskId: row.context_task_entity_id == null ? null : String(row.context_task_entity_id),
+      contextTaskName: row.context_task_name == null ? null : String(row.context_task_name),
+      eventId: row.event_id == null ? null : String(row.event_id),
+      evidenceCount: Number(row.evidence_count ?? 0)
+    };
+  });
+
+  return {
+    available: rows.length > 0 || await hasTypedLineageRelations(input),
+    nodes: [...nodes.values()],
+    edges,
+    hasMore
+  };
+}
+
+function lineageNodeFromRow(row: Record<string, unknown>) {
+  return {
+    id: String(row.id),
+    sourceId: String(row.source_id),
+    type: String(row.type) as "task" | "table" | "column",
+    name: String(row.name),
+    normalizedName: String(row.normalized_name),
+    relationCount: Number(row.relation_count ?? 0)
+  };
+}
+
+function addLineageNode(
+  nodes: Map<string, ReturnType<typeof lineageNodeFromRow>>,
+  row: Record<string, unknown>
+): void {
+  const candidate = lineageNodeFromRow(row);
+  const existing = nodes.get(candidate.id);
+  if (existing) {
+    existing.relationCount += candidate.relationCount;
+    return;
+  }
+  nodes.set(candidate.id, candidate);
+}
+
+async function hasTypedLineageRelations(input: { sourceId: string; tenantId: string }): Promise<boolean> {
+  const result = await pool.query(
+    `
+      select exists (
+        select 1
+        from lineage_relations lr
+        join events e on e.id = lr.event_id
+        join documents d on d.id = e.document_id
+        join sources s on s.id = lr.source_id
+        where lr.source_id = $1
+          and s.tenant_id = $2
+          and s.archived_at is null
+          and d.archived_at is null
+          and e.deleted_at is null
+      ) as available
+    `,
+    [input.sourceId, input.tenantId]
+  );
+  return result.rows[0]?.available === true;
 }
 
 export async function getDocumentDetail(input: {

@@ -115,6 +115,33 @@ export interface ProjectGraphRecord {
   }>;
 }
 
+export interface LineageGraphNodeRecord {
+  id: string;
+  sourceId: string;
+  type: "task" | "table" | "column";
+  name: string;
+  normalizedName: string;
+  relationCount: number;
+}
+
+export interface LineageGraphEdgeRecord {
+  id: string;
+  sourceId: string;
+  targetId: string;
+  type: string;
+  contextTaskId?: string | null;
+  contextTaskName?: string | null;
+  eventId?: string | null;
+  evidenceCount: number;
+}
+
+export interface LineageGraphRecord {
+  available: boolean;
+  nodes: LineageGraphNodeRecord[];
+  edges: LineageGraphEdgeRecord[];
+  hasMore: boolean;
+}
+
 export interface IngestDocumentInput {
   sourceId?: string;
   title: string;
@@ -170,12 +197,25 @@ export interface ExtractedEvent {
   status?: string;
   references: string[];
   entities: ExtractedEntity[];
+  relations?: ExtractedRelation[];
 }
 
 export interface ExtractedEntity {
   type: string;
   name: string;
   description: string;
+}
+
+export interface ExtractedEntityRef {
+  type: "task" | "table" | "column";
+  name: string;
+}
+
+export interface ExtractedRelation {
+  source: ExtractedEntityRef;
+  type: string;
+  target: ExtractedEntityRef;
+  contextTask?: string;
 }
 
 export interface SourceRecord {

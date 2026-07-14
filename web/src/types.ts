@@ -151,6 +151,33 @@ export interface ProjectGraphRecord {
   }>;
 }
 
+export interface LineageGraphNodeRecord {
+  id: string;
+  sourceId: string;
+  type: "task" | "table" | "column";
+  name: string;
+  normalizedName: string;
+  relationCount: number;
+}
+
+export interface LineageGraphEdgeRecord {
+  id: string;
+  sourceId: string;
+  targetId: string;
+  type: string;
+  contextTaskId?: string | null;
+  contextTaskName?: string | null;
+  eventId?: string | null;
+  evidenceCount: number;
+}
+
+export interface LineageGraphRecord {
+  available: boolean;
+  nodes: LineageGraphNodeRecord[];
+  edges: LineageGraphEdgeRecord[];
+  hasMore: boolean;
+}
+
 export type SearchStreamEvent =
   | SearchProgressEvent
   | { type: "done"; result: SearchResult }

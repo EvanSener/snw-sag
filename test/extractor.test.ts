@@ -50,6 +50,85 @@ describe("extractEventsFromChunk", () => {
     expect(extractWithLlm).not.toHaveBeenCalled();
   });
 
+  it("preserves validated v2 typed relations without adding inferred edges", async () => {
+    const extractWithLlm = vi.fn(async () => []);
+    const llm: LlmClient = {
+      extractNamedEntities: vi.fn(async () => []),
+      rerankEvents: vi.fn(async () => []),
+      extractEventsFromChunk: extractWithLlm
+    };
+    const envelope = {
+      schema: "snw.sql_lineage_event.v2",
+      title: "表数据流：db.b 写入 db.c",
+      summary: "任务 task_a 从 db.b 写入 db.c。",
+      content: "db.b 通过任务 task_a 产出 db.c。",
+      category: "TABLE_DATA_FLOW",
+      keywords: ["task_a", "db.b", "db.c"],
+      entities: [
+        { type: "task", name: "task_a", description: "执行写入的任务" },
+        { type: "table", name: "db.b", description: "来源表" },
+        { type: "table", name: "db.c", description: "目标表" }
+      ],
+      relations: [
+        {
+          source: { type: "table", name: "db.b" },
+          type: "DATA_FLOW",
+          target: { type: "table", name: "db.c" },
+          contextTask: "task_a"
+        }
+      ]
+    };
+
+    const [event] = await extractEventsFromChunk({
+      llm,
+      documentTitle: "task_a",
+      heading: envelope.title,
+      content: envelope.content,
+      rawContent: `\`\`\`sag-event\n${JSON.stringify(envelope)}\n\`\`\``,
+      references: []
+    });
+
+    expect(event.relations).toEqual(envelope.relations);
+    expect(extractWithLlm).not.toHaveBeenCalled();
+  });
+
+  it("rejects a v2 relation that references an undeclared entity", async () => {
+    const extractWithLlm = vi.fn(async () => []);
+    const llm: LlmClient = {
+      extractNamedEntities: vi.fn(async () => []),
+      rerankEvents: vi.fn(async () => []),
+      extractEventsFromChunk: extractWithLlm
+    };
+    const envelope = {
+      schema: "snw.sql_lineage_event.v2",
+      title: "非法关系",
+      summary: "关系目标没有声明。",
+      content: "关系引用必须闭合。",
+      category: "TABLE_DATA_FLOW",
+      keywords: ["db.b", "db.c"],
+      entities: [
+        { type: "table", name: "db.b", description: "来源表" }
+      ],
+      relations: [
+        {
+          source: { type: "table", name: "db.b" },
+          type: "DATA_FLOW",
+          target: { type: "table", name: "db.c" }
+        }
+      ]
+    };
+
+    await expect(extractEventsFromChunk({
+      llm,
+      documentTitle: "task_a",
+      heading: envelope.title,
+      content: envelope.content,
+      rawContent: `\`\`\`sag-event\n${JSON.stringify(envelope)}\n\`\`\``,
+      references: []
+    })).rejects.toThrow("undeclared entity");
+    expect(extractWithLlm).not.toHaveBeenCalled();
+  });
+
   it("rejects malformed structured SAG event JSON instead of falling back to the LLM", async () => {
     const extractWithLlm = vi.fn(async () => []);
     const llm: LlmClient = {

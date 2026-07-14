@@ -4,6 +4,9 @@
 
 # SAG
 
+> [!NOTE]
+> 本仓库是上游 Zleap-AI/SAG 的 `snw-sag` 兼容分支，增加 v1/v2 结构化事件信封、`task/table/column` 类型关系和按需血缘图查询；普通文档行为保持兼容。
+
 **语言**：简体中文 | [English](README.md)
 
 > **SAG:** 可以在大规模动态数据上运行的图谱检索技术

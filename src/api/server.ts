@@ -69,6 +69,14 @@ const uploadSchema = z.object({
   }).optional()
 });
 
+const lineageGraphQuerySchema = z.object({
+  nodeId: z.string().uuid().optional(),
+  query: z.string().trim().min(1).max(200).optional(),
+  limit: z.coerce.number().int().min(1).max(200).default(100)
+}).refine((value) => !(value.nodeId && value.query), {
+  message: "nodeId and query cannot be used together"
+});
+
 const projectSchema = z.object({
   name: z.string().min(1),
   description: z.string().optional().nullable()
@@ -244,6 +252,15 @@ export function buildHttpServer() {
     z.string().uuid().parse(params.projectId);
     return {
       graph: await webuiService.getProjectGraph(params.projectId)
+    };
+  });
+
+  app.get("/api/projects/:projectId/lineage-graph", async (request) => {
+    const params = request.params as { projectId: string };
+    z.string().uuid().parse(params.projectId);
+    const query = lineageGraphQuerySchema.parse(request.query);
+    return {
+      graph: await webuiService.getLineageGraph(params.projectId, query)
     };
   });
 

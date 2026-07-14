@@ -10,6 +10,7 @@ import {
   getEntityDetail,
   getDocumentDetail,
   getEventDetail,
+  getLineageGraphPage,
   getProjectGraph,
   getProjectStats,
   listChunksByDocument,
@@ -302,6 +303,14 @@ export class WebuiService {
 
   async getProjectGraph(projectId: string, tenantId = config.DEFAULT_TENANT_ID) {
     return getProjectGraph({ sourceId: projectId, tenantId });
+  }
+
+  async getLineageGraph(
+    projectId: string,
+    input: { nodeId?: string; query?: string; limit: number },
+    tenantId = config.DEFAULT_TENANT_ID
+  ) {
+    return getLineageGraphPage({ sourceId: projectId, tenantId, ...input });
   }
 
   async updateDocument(documentId: string, input: { title?: string }, tenantId = config.DEFAULT_TENANT_ID) {

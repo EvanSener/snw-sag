@@ -36,6 +36,7 @@ import type {
   McpStreamEvent,
   McpToolCallRecord,
   ModelCallLogRecord,
+  LineageGraphRecord,
   ProjectGraphRecord,
   ProjectStatsRecord,
   ChunkingMode,
@@ -53,6 +54,7 @@ import { Card, CardContent, CardHeader } from "./components/ui/card";
 import { Input } from "./components/ui/input";
 import { Textarea } from "./components/ui/textarea";
 import { ProjectGraphFlow } from "./components/ProjectGraphFlow";
+import { LineageGraphFlow } from "./components/LineageGraphFlow";
 import { I18nProvider, useI18n, useLanguageController, type LanguagePreference, type SupportedLanguage } from "./i18n";
 
 type WorkspaceView = "chat" | "documents" | "graph" | "mcp" | "settings";
@@ -111,7 +113,9 @@ function AppShell() {
   const [projects, setProjects] = useState<SourceRecord[]>([]);
   const [documents, setDocuments] = useState<DocumentRecord[]>([]);
   const [projectStats, setProjectStats] = useState<ProjectStatsRecord | null>(null);
+  const [lineageGraph, setLineageGraph] = useState<LineageGraphRecord | null>(null);
   const [projectGraph, setProjectGraph] = useState<ProjectGraphRecord | null>(null);
+  const [isGraphLoading, setIsGraphLoading] = useState(false);
   const [selectedProjectId, setSelectedProjectId] = useState("");
   const [selectedDocumentId, setSelectedDocumentId] = useState("");
   const [selectedDocument, setSelectedDocument] = useState<DocumentRecord | null>(null);
@@ -227,12 +231,49 @@ function AppShell() {
       setSelectedDocumentId("");
       setSelectedDocument(null);
       setProjectStats(null);
+      setLineageGraph(null);
       setProjectGraph(null);
+      setIsGraphLoading(false);
       setMcpDetail(null);
       return;
     }
+    setLineageGraph(null);
+    setProjectGraph(null);
     void loadProjectWorkspace(selectedProjectId);
   }, [selectedProjectId, showArchivedDocuments]);
+
+  useEffect(() => {
+    if (
+      workspaceView !== "graph"
+      || !selectedProjectId
+      || !lineageGraph
+      || lineageGraph.available
+      || projectGraph
+    ) {
+      return undefined;
+    }
+    let cancelled = false;
+    setIsGraphLoading(true);
+    void api.getProjectGraph(selectedProjectId)
+      .then((response) => {
+        if (!cancelled) {
+          setProjectGraph(response.graph);
+        }
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          setError(getErrorMessage(err));
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setIsGraphLoading(false);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [lineageGraph, projectGraph, selectedProjectId, workspaceView]);
 
   useEffect(() => {
     if (!selectedDocumentId) {
@@ -307,11 +348,12 @@ function AppShell() {
   async function loadProjectWorkspace(projectId: string) {
     try {
       setError("");
-      const [documentsResponse, sessionsResponse, statsResponse, graphResponse] = await Promise.all([
+      setIsGraphLoading(true);
+      const [documentsResponse, sessionsResponse, statsResponse, lineageResponse] = await Promise.all([
         api.listDocuments(projectId, showArchivedDocuments),
         api.listMcpSessions(projectId),
         api.getProjectStats(projectId),
-        api.getProjectGraph(projectId)
+        api.getLineageGraph(projectId, { limit: 100 })
       ]);
       setDocuments(documentsResponse.documents);
       setSessionsByProjectId((current) => ({
@@ -319,7 +361,8 @@ function AppShell() {
         [projectId]: sessionsResponse.sessions
       }));
       setProjectStats(statsResponse.stats);
-      setProjectGraph(graphResponse.graph);
+      setLineageGraph(lineageResponse.graph);
+      setProjectGraph(null);
       if (documentsResponse.documents[0] && !documentsResponse.documents.some((item) => item.id === selectedDocumentId)) {
         setSelectedDocumentId(documentsResponse.documents[0].id);
       }
@@ -339,7 +382,23 @@ function AppShell() {
       setStatus(t("就绪", "Ready"));
     } catch (err) {
       setError(getErrorMessage(err));
+    } finally {
+      setIsGraphLoading(false);
     }
+  }
+
+  async function loadLineageNode(nodeId: string): Promise<LineageGraphRecord> {
+    if (!selectedProjectId) {
+      throw new Error(t("未选择项目", "No project selected"));
+    }
+    return (await api.getLineageGraph(selectedProjectId, { nodeId, limit: 200 })).graph;
+  }
+
+  async function searchLineageEntities(query: string): Promise<LineageGraphRecord> {
+    if (!selectedProjectId) {
+      throw new Error(t("未选择项目", "No project selected"));
+    }
+    return (await api.getLineageGraph(selectedProjectId, { query, limit: 100 })).graph;
   }
 
   async function loadDocumentWorkspace(documentId: string) {
@@ -1095,7 +1154,8 @@ function AppShell() {
 
   return (
     <div className={cn(
-      "grid h-dvh min-h-0 grid-cols-[minmax(188px,220px)_minmax(0,1fr)] overflow-hidden bg-background text-foreground",
+      "grid h-dvh min-h-0 grid-cols-1 overflow-hidden bg-background text-foreground",
+      "sm:grid-cols-[minmax(188px,220px)_minmax(0,1fr)]",
       "lg:grid-cols-[268px_minmax(0,1fr)]"
     )}>
       <ProjectRail
@@ -1127,7 +1187,23 @@ function AppShell() {
       />
 
       <div className="flex min-h-0 min-w-0 flex-col overflow-hidden">
-        <header className="flex min-h-16 shrink-0 items-center justify-start border-b border-border px-4 py-2 md:px-6">
+        <header className="flex min-h-16 shrink-0 flex-col items-stretch justify-center gap-2 border-b border-border px-3 py-2 sm:flex-row sm:items-center sm:justify-start md:px-6">
+          {workspaceView === "settings" ? null : (
+            <label className="relative flex h-9 min-w-0 items-center sm:hidden">
+              <Folder className="pointer-events-none absolute left-3 h-4 w-4 text-muted-foreground" />
+              <span className="sr-only">{t("选择项目", "Select project")}</span>
+              <select
+                className="h-9 w-full min-w-0 appearance-none rounded-md border border-input bg-background pl-9 pr-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                value={selectedProjectId}
+                onChange={(event) => setSelectedProjectId(event.target.value)}
+              >
+                <option value="">{t("选择项目", "Select project")}</option>
+                {projects.map((project) => (
+                  <option key={project.id} value={project.id}>{project.name}</option>
+                ))}
+              </select>
+            </label>
+          )}
           {workspaceView === "settings" ? null : (
             <MainWorkspaceTabs
               view={workspaceView}
@@ -1195,7 +1271,11 @@ function AppShell() {
             ) : workspaceView === "graph" ? (
               <ProjectGraphWorkspace
                 project={selectedProject}
-                graph={projectGraph}
+                lineageGraph={lineageGraph}
+                legacyGraph={projectGraph}
+                isLoading={isGraphLoading}
+                onLoadNode={loadLineageNode}
+                onSearch={searchLineageEntities}
                 onOpenEvent={(eventId) => void openEventDetail(eventId)}
                 onOpenEntity={(entityId) => void openEntityDetail(entityId)}
               />
@@ -1336,7 +1416,7 @@ function ProjectRail(props: {
 
   return (
     <>
-      <aside className="relative z-10 flex min-h-0 flex-col overflow-hidden border-r border-border bg-muted/40">
+      <aside className="relative z-10 hidden min-h-0 flex-col overflow-hidden border-r border-border bg-muted/40 sm:flex">
         <div className="border-b border-border p-4">
           <div className="flex items-start justify-between gap-2">
             <div className="flex min-w-0 items-center gap-2">
@@ -2081,12 +2161,15 @@ function ProjectDocumentsWorkspace(props: {
 
 function ProjectGraphWorkspace(props: {
   project: SourceRecord | null;
-  graph: ProjectGraphRecord | null;
+  lineageGraph: LineageGraphRecord | null;
+  legacyGraph: ProjectGraphRecord | null;
+  isLoading: boolean;
+  onLoadNode: (nodeId: string) => Promise<LineageGraphRecord>;
+  onSearch: (query: string) => Promise<LineageGraphRecord>;
   onOpenEvent: (eventId: string) => void;
   onOpenEntity: (entityId: string) => void;
 }) {
   const { t, language } = useI18n();
-  const graph = props.graph;
 
   if (!props.project) {
     return (
@@ -2096,6 +2179,41 @@ function ProjectGraphWorkspace(props: {
     );
   }
 
+  if (!props.lineageGraph || (props.isLoading && !props.lineageGraph)) {
+    return (
+      <section className="flex min-h-0 flex-1 items-center justify-center px-6">
+        <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" aria-label={t("正在加载图谱", "Loading graph")} />
+      </section>
+    );
+  }
+
+  if (props.lineageGraph.available) {
+    return (
+      <section className="flex min-h-0 flex-1 p-2 md:p-4">
+        <div className="min-h-0 flex-1">
+          <LineageGraphFlow
+            key={props.project.id}
+            graph={props.lineageGraph}
+            language={language}
+            loadNode={props.onLoadNode}
+            search={props.onSearch}
+            onOpenEvent={props.onOpenEvent}
+            onOpenEntity={props.onOpenEntity}
+          />
+        </div>
+      </section>
+    );
+  }
+
+  if (props.isLoading) {
+    return (
+      <section className="flex min-h-0 flex-1 items-center justify-center px-6">
+        <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" aria-label={t("正在加载图谱", "Loading graph")} />
+      </section>
+    );
+  }
+
+  const graph = props.legacyGraph;
   if (!graph || graph.entities.length === 0 || graph.events.length === 0) {
     return (
       <section className="flex min-h-0 flex-1 items-center justify-center px-6">

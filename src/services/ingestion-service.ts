@@ -42,7 +42,7 @@ type RelationEmbeddingInput = {
 type PreparedEvent = EventEmbeddingInput & {
   entities: Array<ExtractedEntity & {
     entityEmbedding: number[];
-    relationEmbedding: number[];
+    relationEmbedding: number[] | null;
   }>;
 };
 
@@ -172,6 +172,7 @@ export class IngestionService {
         );
       }
 
+      const persistedEntityIds = new Map<string, string>();
       for (const preparedEvent of preparedEvents) {
         await client.query(
           `
@@ -206,14 +207,21 @@ export class IngestionService {
           ]
         );
 
+        const entityIds = new Map<string, string>();
         for (const entity of preparedEvent.entities) {
-          const saved = await upsertEntity({
-            sourceId: source.id,
-            type: entity.type,
-            name: entity.name,
-            description: entity.description,
-            embedding: entity.entityEmbedding
-          }, client);
+          const key = entityKey(entity.type, entity.name);
+          let savedId = persistedEntityIds.get(key);
+          if (!savedId) {
+            const saved = await upsertEntity({
+              sourceId: source.id,
+              type: entity.type,
+              name: entity.name,
+              description: entity.description,
+              embedding: entity.entityEmbedding
+            }, client);
+            savedId = saved.id;
+            persistedEntityIds.set(key, savedId);
+          }
           await client.query(
             `
               insert into event_entities (id, event_id, entity_id, weight, description, embedding)
@@ -225,9 +233,37 @@ export class IngestionService {
             [
               randomUUID(),
               preparedEvent.eventId,
-              saved.id,
+              savedId,
               entity.description,
-              toVectorLiteral(entity.relationEmbedding)
+              entity.relationEmbedding ? toVectorLiteral(entity.relationEmbedding) : null
+            ]
+          );
+          entityIds.set(key, savedId);
+        }
+
+        for (const relation of preparedEvent.event.relations ?? []) {
+          const sourceEntityId = requiredEntityId(entityIds, relation.source.type, relation.source.name);
+          const targetEntityId = requiredEntityId(entityIds, relation.target.type, relation.target.name);
+          const contextTaskEntityId = relation.contextTask
+            ? requiredEntityId(entityIds, "task", relation.contextTask)
+            : null;
+          await client.query(
+            `
+              insert into lineage_relations (
+                id, source_id, event_id, source_entity_id, target_entity_id,
+                relation_type, context_task_entity_id, metadata
+              )
+              values ($1, $2, $3, $4, $5, $6, $7, '{}'::jsonb)
+              on conflict do nothing
+            `,
+            [
+              randomUUID(),
+              source.id,
+              preparedEvent.eventId,
+              sourceEntityId,
+              targetEntityId,
+              relation.type,
+              contextTaskEntityId
             ]
           );
         }
@@ -361,11 +397,13 @@ export class IngestionService {
     const entityEmbeddings = new Map(entityEmbeddingEntries);
 
     const relationInputs: RelationEmbeddingInput[] = eventInputs.flatMap((item) => (
-      item.event.entities.map((entity) => ({
-        eventId: item.eventId,
-        eventTitle: item.event.title,
-        entity
-      }))
+      item.event.relations
+        ? []
+        : item.event.entities.map((entity) => ({
+            eventId: item.eventId,
+            eventTitle: item.event.title,
+            entity
+          }))
     ));
     let embeddedRelations = 0;
     const relationEmbeddingEntries = await mapWithConcurrency(relationInputs, input.concurrency, async (inputItem) => {
@@ -388,13 +426,13 @@ export class IngestionService {
       entities: eventInput.event.entities.map((entity) => {
         const entityEmbedding = entityEmbeddings.get(entityEmbeddingKey(entity));
         const relationEmbedding = relationEmbeddings.get(relationEmbeddingKey(eventInput.eventId, entity));
-        if (!entityEmbedding || !relationEmbedding) {
+        if (!entityEmbedding || (!eventInput.event.relations && !relationEmbedding)) {
           throw new Error("实体或关系向量生成不完整");
         }
         return {
           ...entity,
           entityEmbedding,
-          relationEmbedding
+          relationEmbedding: relationEmbedding ?? null
         };
       })
     }));
@@ -402,6 +440,18 @@ export class IngestionService {
 }
 
 export const ingestionService = new IngestionService();
+
+function entityKey(type: string, name: string): string {
+  return `${type}\u0000${name.trim().toLowerCase()}`;
+}
+
+function requiredEntityId(entityIds: Map<string, string>, type: string, name: string): string {
+  const id = entityIds.get(entityKey(type, name));
+  if (!id) {
+    throw new Error(`Structured relation references an entity that was not persisted: ${type}:${name}`);
+  }
+  return id;
+}
 
 async function mapWithConcurrency<T, R>(
   items: T[],

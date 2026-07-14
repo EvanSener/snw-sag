@@ -9,6 +9,7 @@ import type {
   McpSessionRecord,
   McpStreamEvent,
   ModelCallLogRecord,
+  LineageGraphRecord,
   ProjectGraphRecord,
   ProjectStatsRecord,
   PublicAiProviderSettings,
@@ -97,6 +98,15 @@ export const api = {
 
   async getProjectGraph(projectId: string) {
     return request<{ graph: ProjectGraphRecord }>(`/api/projects/${projectId}/graph`);
+  },
+
+  async getLineageGraph(projectId: string, input: { nodeId?: string; query?: string; limit?: number } = {}) {
+    const params = new URLSearchParams();
+    if (input.nodeId) params.set("nodeId", input.nodeId);
+    if (input.query) params.set("query", input.query);
+    if (input.limit) params.set("limit", String(input.limit));
+    const suffix = params.size > 0 ? `?${params.toString()}` : "";
+    return request<{ graph: LineageGraphRecord }>(`/api/projects/${projectId}/lineage-graph${suffix}`);
   },
 
   async getDocument(documentId: string) {

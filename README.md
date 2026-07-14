@@ -5,7 +5,7 @@
 # SAG
 
 > [!NOTE]
-> 本仓库是上游 Zleap-AI/SAG 的 `snw-sag` 兼容分支。当前扩展只增加版本化结构化事件信封，使 SQL 血缘等确定性数据可以直接写入准确事件及 `task/table/column` 实体；未携带信封的普通文档继续使用上游原有抽取流程。
+> 本仓库是上游 Zleap-AI/SAG 的 `snw-sag` 兼容分支。当前扩展增加版本化结构化事件信封、类型关系存储和按需图查询，使 SQL 血缘等确定性数据可以直接写入准确的 `task/table/column` 图；未携带信封的普通文档继续使用上游原有流程。
 
 
 **Language**: English | [简体中文](README-CN.md)
@@ -22,12 +22,12 @@ This project is an out-of-the-box document retrieval workbench built on SAG. Aft
 
 ## Structured Event Envelope
 
-确定性数据生产方可以在每个 Markdown section 中提供一个 `sag-event` 代码块。SAG 检测到信封后直接校验并保存事件，不调用 LLM 或本地文本实体猜测；信封无效时整次摄取失败。`snw.sql_lineage_event.v1` 当前只允许 `task`、`table`、`column` 三种实体类型。
+确定性数据生产方可以在每个 Markdown section 中提供一个 `sag-event` 代码块。SAG 检测到信封后直接校验并保存事件，不调用 LLM 或本地文本实体猜测；信封无效时整次摄取失败。v1 与 v2 都只允许 `task`、`table`、`column` 三种实体类型，v2 额外要求显式 `relations` 并校验引用闭包。
 
 ````markdown
 ```sag-event
 {
-  "schema": "snw.sql_lineage_event.v1",
+  "schema": "snw.sql_lineage_event.v2",
   "title": "字段加工：target.result 来自 source.a、source.b",
   "summary": "target.result 由两个上游字段共同加工。",
   "content": "目标字段 target.result 来自 source.a、source.b。",
@@ -38,10 +38,32 @@ This project is an out-of-the-box document retrieval workbench built on SAG. Aft
     { "type": "column", "name": "target.result", "description": "目标字段" },
     { "type": "column", "name": "source.a", "description": "上游字段" },
     { "type": "column", "name": "source.b", "description": "上游字段" }
+  ],
+  "relations": [
+    {
+      "source": { "type": "column", "name": "source.a" },
+      "type": "DERIVED_FROM",
+      "target": { "type": "column", "name": "target.result" },
+      "contextTask": "lineage_task"
+    },
+    {
+      "source": { "type": "column", "name": "source.b" },
+      "type": "DERIVED_FROM",
+      "target": { "type": "column", "name": "target.result" },
+      "contextTask": "lineage_task"
+    }
   ]
 }
 ```
 ````
+
+任务只通过 `PRODUCES` 指向写入目标表；表数据流和 JOIN 用 `contextTask` 保留执行任务；表字段归属和字段加工分别使用 `HAS_COLUMN` 与 `*_FROM`。图谱首屏只读取受限数量的 `PRODUCES` 骨架，节点单击按一跳加载，实体搜索不读取全量关系：
+
+```text
+GET /api/projects/:projectId/lineage-graph?limit=100
+GET /api/projects/:projectId/lineage-graph?nodeId=<entityId>&limit=200
+GET /api/projects/:projectId/lineage-graph?query=<name>&limit=100
+```
 
 ![SAG chat workbench](docs/assets/sag-chat.png)
 
@@ -95,7 +117,7 @@ Core features:
 - **Source citations**: answers can show numbered citations; click a number to view the original chunk.
 - **Search trace visualization**: the right panel shows SAG's internal retrieval steps and latency in real time.
 - **Raw logs**: browser cache stores raw LLM / Embedding / Rerank requests and responses.
-- **Knowledge graph**: explore project relations with event and entity nodes; drag, zoom, expand, and open details.
+- **Knowledge graph**: explore ordinary event/entity graphs or lazily expand typed task/table/column lineage graphs.
 - **MCP integration**: each project exposes its own MCP configuration so external agents can call the current project directly.
 
 ## Tech Stack

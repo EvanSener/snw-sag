@@ -4,6 +4,9 @@
 
 # SAG
 
+> [!NOTE]
+> 本仓库是上游 Zleap-AI/SAG 的 `snw-sag` 兼容分支。当前扩展只增加版本化结构化事件信封，使 SQL 血缘等确定性数据可以直接写入准确事件及 `task/table/column` 实体；未携带信封的普通文档继续使用上游原有抽取流程。
+
 
 **Language**: English | [简体中文](README-CN.md)
 
@@ -14,6 +17,31 @@
 
 
 This project is an out-of-the-box document retrieval workbench built on SAG. After you upload Markdown or TXT documents, SAG automatically handles chunking, vectorization, event extraction, entity extraction, and relation organization. You can ask questions over project documents in a ChatGPT-like interface, inspect chunks, events, entities, embeddings, search traces, raw model logs, and explore the knowledge graph.
+
+本分支使用项目本地 `openspec/` 管理兼容扩展：`/opsx-propose` 创建变更，`/opsx-explore` 调研，`/opsx-apply` 实施，`/opsx-archive` 归档；新增功能和多文件改动必须先补齐 proposal、specs、design 和 tasks。
+
+## Structured Event Envelope
+
+确定性数据生产方可以在每个 Markdown section 中提供一个 `sag-event` 代码块。SAG 检测到信封后直接校验并保存事件，不调用 LLM 或本地文本实体猜测；信封无效时整次摄取失败。`snw.sql_lineage_event.v1` 当前只允许 `task`、`table`、`column` 三种实体类型。
+
+````markdown
+```sag-event
+{
+  "schema": "snw.sql_lineage_event.v1",
+  "title": "字段加工：target.result 来自 source.a、source.b",
+  "summary": "target.result 由两个上游字段共同加工。",
+  "content": "目标字段 target.result 来自 source.a、source.b。",
+  "category": "COLUMN_TO_COLUMN_LINEAGE",
+  "keywords": ["target.result", "source.a", "source.b"],
+  "entities": [
+    { "type": "task", "name": "lineage_task", "description": "SQL 血缘任务" },
+    { "type": "column", "name": "target.result", "description": "目标字段" },
+    { "type": "column", "name": "source.a", "description": "上游字段" },
+    { "type": "column", "name": "source.b", "description": "上游字段" }
+  ]
+}
+```
+````
 
 ![SAG chat workbench](docs/assets/sag-chat.png)
 

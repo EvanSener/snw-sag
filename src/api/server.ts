@@ -4,6 +4,7 @@ import Fastify from "fastify";
 import fastifyStatic from "@fastify/static";
 import { z } from "zod";
 import { config, SUPPORTED_EMBEDDING_DIMENSIONS } from "../config/env.js";
+import { MAX_UPLOAD_BODY_BYTES } from "../config/limits.js";
 import { ingestionService } from "../services/ingestion-service.js";
 import { searchService } from "../services/search-service.js";
 import { graphService } from "../services/graph-service.js";
@@ -246,13 +247,13 @@ export function buildHttpServer() {
     };
   });
 
-  app.post("/api/documents/upload", async (request, reply) => {
+  app.post("/api/documents/upload", { bodyLimit: MAX_UPLOAD_BODY_BYTES }, async (request, reply) => {
     const input = uploadSchema.parse(request.body);
     const result = await webuiService.uploadDocument(input);
     return reply.code(201).send(result);
   });
 
-  app.post("/api/documents/upload/jobs", async (request, reply) => {
+  app.post("/api/documents/upload/jobs", { bodyLimit: MAX_UPLOAD_BODY_BYTES }, async (request, reply) => {
     const input = uploadSchema.parse(request.body);
     const job = await webuiService.createUploadJob(input);
     return reply.code(202).send({ job });

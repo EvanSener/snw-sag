@@ -296,6 +296,7 @@ export class IngestionService {
         documentTitle: input.input.title,
         heading: chunk.heading,
         content: chunk.content,
+        rawContent: chunk.rawContent,
         references: chunk.sectionIds
       });
       extractedChunks += 1;

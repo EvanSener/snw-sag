@@ -1,13 +1,20 @@
 import type { ExtractedEvent } from "../../types.js";
 import type { LlmClient } from "../../ai/llm-client.js";
+import { parseStructuredEvent } from "./structured-event.js";
 
 export async function extractEventsFromChunk(input: {
   llm: LlmClient;
   documentTitle: string;
   heading?: string;
   content: string;
+  rawContent: string;
   references: string[];
 }): Promise<ExtractedEvent[]> {
+  const structuredEvent = parseStructuredEvent(input.rawContent, input.references);
+  if (structuredEvent) {
+    return [structuredEvent];
+  }
+
   const events = await input.llm.extractEventsFromChunk({
     title: input.documentTitle,
     heading: input.heading,

@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { MAX_UPLOAD_BYTES } from "../config/limits.js";
 import { config } from "../config/env.js";
 import {
   archiveDocument,
@@ -24,7 +25,6 @@ import {
 import { ingestionService } from "./ingestion-service.js";
 import type { ChunkingMode, IngestProgressStage, IngestProgressUpdate } from "../types.js";
 
-const MAX_UPLOAD_BYTES = 5 * 1024 * 1024;
 const ALLOWED_EXTENSIONS = new Set([".md", ".txt"]);
 
 type UploadJobStatus = "QUEUED" | "RUNNING" | "COMPLETED" | "FAILED";

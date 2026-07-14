@@ -89,6 +89,30 @@ export const defaultEntityTypes = [
     description: "Fallback labels when no specific entity type fits.",
     weight: 0.5,
     similarityThreshold: 0.7
+  },
+  {
+    id: "30000000-0000-0000-0000-000000000012",
+    type: "task",
+    name: "task",
+    description: "SQL lineage tasks that produce or transform data.",
+    weight: 1.3,
+    similarityThreshold: 0.85
+  },
+  {
+    id: "30000000-0000-0000-0000-000000000013",
+    type: "table",
+    name: "table",
+    description: "Database tables participating in SQL lineage.",
+    weight: 1.2,
+    similarityThreshold: 0.85
+  },
+  {
+    id: "30000000-0000-0000-0000-000000000014",
+    type: "column",
+    name: "column",
+    description: "Database columns participating in SQL lineage.",
+    weight: 1.2,
+    similarityThreshold: 0.9
   }
 ] as const;
 

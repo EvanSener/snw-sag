@@ -1,0 +1,39 @@
+schema: spec-driven-zh
+
+context: |
+  Project: snw-sag
+  Runtime: Node.js 20+、TypeScript、Fastify、React、Vite、PostgreSQL、pgvector
+  Key modules:
+    - src/ingestion：文档切片和事件抽取
+    - src/services/ingestion-service.ts：事件、实体和关系写入
+    - src/api/server.ts：HTTP API
+    - web/：SAG WebUI
+  Conventions:
+    - 用户面向文档默认使用简体中文。
+    - 代码、命令、路径、schema ID 和结构标记保持工具要求的原格式。
+    - 优先复用目标项目已有目录边界和模块组织方式。
+    - 变更应局部化，避免跨兄弟项目重构。
+    - 保持未携带结构化信封的上游普通文档行为兼容。
+  Constraints:
+    - 修改前先确认目标子项目，并优先阅读离目标最近的 README、AGENTS.md 和本地说明。
+    - 若目标项目已有更近一层的 AI 约束或工程规范，以项目本地规则优先。
+    - 避免修改运行产物、缓存目录和自动生成文件，除非任务明确要求。
+    - 已声明 schema 的无效结构化信封必须失败，不得静默回退到通用抽取。
+
+rules:
+  proposal:
+    - 默认使用简体中文。
+    - 明确写出受影响的模块、目录或运行边界。
+    - 若存在用户可见变化、兼容性影响或迁移动作，必须写清。
+  specs:
+    - 默认使用简体中文编写 requirement 和 scenario 内容。
+    - 保留 OpenSpec 结构标记原样，不要本地化这些关键标记。
+    - 先检查现有 specs，再决定是新增 capability 还是修改既有 capability。
+  design:
+    - 默认使用简体中文。
+    - 聚焦架构、边界、权衡、风险和迁移，不写成逐行实现说明。
+    - 若改动跨多个模块或运行时边界，明确画出数据流或消息流。
+  tasks:
+    - 默认使用简体中文。
+    - 任务必须可执行、可验证，优先拆成小步。
+    - 如项目已有测试、构建、lint 或发布命令，任务里应引用现有命令。

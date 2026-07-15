@@ -103,6 +103,8 @@ export function mergeLineageGraphs(
   page: LineageGraphRecord,
   maxVisibleNodes: number
 ): LineageGraphRecord {
+  assertMergeCompatibility(current, page);
+
   const nodes = new Map(current.nodes.map((node) => [node.id, node]));
   for (const node of page.nodes) {
     if (nodes.has(node.id) || nodes.size < maxVisibleNodes) {
@@ -116,13 +118,37 @@ export function mergeLineageGraphs(
       edges.set(edge.id, edge);
     }
   }
+  const evidencePathSummaries = new Map(
+    current.evidencePathSummaries.map((summary) => [summary.pathId, summary])
+  );
+  for (const summary of page.evidencePathSummaries) {
+    evidencePathSummaries.set(summary.pathId, summary);
+  }
   return {
     ...current,
     available: current.available || page.available,
     nodes: [...nodes.values()],
     edges: [...edges.values()],
+    evidencePathSummaries: [...evidencePathSummaries.values()],
+    stats: {
+      evidenceLoadedNodes: Math.max(current.stats.evidenceLoadedNodes, page.stats.evidenceLoadedNodes),
+      evidenceLoadedEdges: Math.max(current.stats.evidenceLoadedEdges, page.stats.evidenceLoadedEdges),
+      answerNodes: Math.max(current.stats.answerNodes, page.stats.answerNodes),
+      answerEdges: Math.max(current.stats.answerEdges, page.stats.answerEdges),
+      semanticHiddenNodes: Math.max(current.stats.semanticHiddenNodes, page.stats.semanticHiddenNodes),
+      semanticHiddenEdges: Math.max(current.stats.semanticHiddenEdges, page.stats.semanticHiddenEdges)
+    },
     hasMore: current.hasMore || page.hasMore || current.nodes.length + page.nodes.length > maxVisibleNodes
   };
+}
+
+function assertMergeCompatibility(current: LineageGraphRecord, page: LineageGraphRecord): void {
+  if (current.view !== page.view) {
+    throw new Error("Cannot merge lineage graphs with different views");
+  }
+  if (current.graphRevision !== page.graphRevision) {
+    throw new Error("Cannot merge lineage graphs with different revisions");
+  }
 }
 
 function appendNeighbor(

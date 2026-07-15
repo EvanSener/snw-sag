@@ -9,6 +9,8 @@ import type {
   McpSessionRecord,
   McpStreamEvent,
   ModelCallLogRecord,
+  LineageEvidencePathDetail,
+  LineageGraphView,
   LineageGraphRecord,
   ProjectGraphRecord,
   ProjectStatsRecord,
@@ -20,7 +22,7 @@ import type {
   SearchResult,
   SourceRecord,
   UploadJobRecord
-} from "../types";
+} from "../types.js";
 
 function safeParseJson(text: string): any {
   if (!text) return null;
@@ -100,13 +102,33 @@ export const api = {
     return request<{ graph: ProjectGraphRecord }>(`/api/projects/${projectId}/graph`);
   },
 
-  async getLineageGraph(projectId: string, input: { nodeId?: string; query?: string; limit?: number } = {}) {
+  async getLineageGraph(projectId: string, input: {
+    view?: LineageGraphView;
+    nodeId?: string;
+    query?: string;
+    limit?: number;
+    signal?: AbortSignal;
+  } = {}) {
     const params = new URLSearchParams();
+    params.set("view", input.view ?? "answer");
     if (input.nodeId) params.set("nodeId", input.nodeId);
     if (input.query) params.set("query", input.query);
     if (input.limit) params.set("limit", String(input.limit));
-    const suffix = params.size > 0 ? `?${params.toString()}` : "";
-    return request<{ graph: LineageGraphRecord }>(`/api/projects/${projectId}/lineage-graph${suffix}`);
+    return request<{ graph: LineageGraphRecord }>(
+      `/api/projects/${projectId}/lineage-graph?${params.toString()}`,
+      { signal: input.signal }
+    );
+  },
+
+  async getLineageEvidencePath(
+    projectId: string,
+    pathId: string,
+    options: { signal?: AbortSignal } = {}
+  ) {
+    return request<{ path: LineageEvidencePathDetail }>(
+      `/api/projects/${projectId}/lineage-evidence-paths/${encodeURIComponent(pathId)}`,
+      { signal: options.signal }
+    );
   },
 
   async getDocument(documentId: string) {

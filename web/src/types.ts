@@ -172,10 +172,57 @@ export interface LineageGraphEdgeRecord {
   evidenceCount: number;
 }
 
+export type LineageGraphView = "answer" | "evidence";
+
+export type LineageSemanticRole = "business" | "temporary" | "evidence_only";
+
+export interface EvidencePathSummary {
+  pathId: string;
+  sourceNodeId: string | null;
+  targetNodeId: string | null;
+  hiddenNodeCount: number;
+  relationTypes: string[];
+  evidenceCount: number;
+  eventIds: string[];
+}
+
+export interface LineageGraphStats {
+  evidenceLoadedNodes: number;
+  evidenceLoadedEdges: number;
+  answerNodes: number;
+  answerEdges: number;
+  semanticHiddenNodes: number;
+  semanticHiddenEdges: number;
+}
+
+export interface LineageEvidencePathDetail {
+  pathId: string;
+  graphRevision: string;
+  nodes: Array<LineageGraphNodeRecord & {
+    role: LineageSemanticRole;
+    order: number;
+  }>;
+  edges: Array<LineageGraphEdgeRecord & {
+    order: number;
+    eventIds: string[];
+  }>;
+  events: Array<{
+    id: string;
+    title: string;
+    summary: string;
+    relativePath: string;
+    statementId: string;
+  }>;
+}
+
 export interface LineageGraphRecord {
   available: boolean;
+  view: LineageGraphView;
+  graphRevision: string;
   nodes: LineageGraphNodeRecord[];
   edges: LineageGraphEdgeRecord[];
+  evidencePathSummaries: EvidencePathSummary[];
+  stats: LineageGraphStats;
   hasMore: boolean;
 }
 

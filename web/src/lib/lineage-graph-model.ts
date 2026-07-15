@@ -117,6 +117,7 @@ export function mergeLineageGraphs(
     }
   }
   return {
+    ...current,
     available: current.available || page.available,
     nodes: [...nodes.values()],
     edges: [...edges.values()],

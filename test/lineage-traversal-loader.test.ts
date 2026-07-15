@@ -93,7 +93,23 @@ describe("lineage traversal loader", () => {
 });
 
 function graph(nodes: LineageGraphRecord["nodes"], edges: LineageGraphRecord["edges"]): LineageGraphRecord {
-  return { available: true, hasMore: false, nodes, edges };
+  return {
+    available: true,
+    view: "answer",
+    graphRevision: "fixture-revision",
+    nodes,
+    edges,
+    evidencePathSummaries: [],
+    stats: {
+      evidenceLoadedNodes: nodes.length,
+      evidenceLoadedEdges: edges.length,
+      answerNodes: nodes.length,
+      answerEdges: edges.length,
+      semanticHiddenNodes: 0,
+      semanticHiddenEdges: 0
+    },
+    hasMore: false
+  };
 }
 
 function node(id: string): LineageGraphRecord["nodes"][number] {

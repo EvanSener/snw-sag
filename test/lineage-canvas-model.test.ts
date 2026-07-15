@@ -116,6 +116,17 @@ describe("lineage canvas model", () => {
 function fixtureGraph(): LineageGraphRecord {
   return {
     available: true,
+    view: "answer",
+    graphRevision: "fixture-revision",
+    evidencePathSummaries: [],
+    stats: {
+      evidenceLoadedNodes: 7,
+      evidenceLoadedEdges: 6,
+      answerNodes: 7,
+      answerEdges: 6,
+      semanticHiddenNodes: 0,
+      semanticHiddenEdges: 0
+    },
     hasMore: false,
     nodes: [
       node("task-build", "task", "build_summary"),

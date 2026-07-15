@@ -9,6 +9,17 @@ import type { LineageGraphRecord } from "../web/src/types.js";
 
 const graph: LineageGraphRecord = {
   available: true,
+  view: "answer",
+  graphRevision: "fixture-revision",
+  evidencePathSummaries: [],
+  stats: {
+    evidenceLoadedNodes: 6,
+    evidenceLoadedEdges: 5,
+    answerNodes: 6,
+    answerEdges: 5,
+    semanticHiddenNodes: 0,
+    semanticHiddenEdges: 0
+  },
   hasMore: false,
   nodes: [
     node("task-a", "task"),
@@ -65,6 +76,17 @@ describe("lineage graph filtering", () => {
   it("collects only the selected entity neighborhood up to the requested depth", () => {
     const chain: LineageGraphRecord = {
       available: true,
+      view: "answer",
+      graphRevision: "fixture-revision",
+      evidencePathSummaries: [],
+      stats: {
+        evidenceLoadedNodes: 6,
+        evidenceLoadedEdges: 4,
+        answerNodes: 6,
+        answerEdges: 4,
+        semanticHiddenNodes: 0,
+        semanticHiddenEdges: 0
+      },
       hasMore: false,
       nodes: [
         node("a", "task"),

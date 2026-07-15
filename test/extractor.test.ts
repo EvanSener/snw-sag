@@ -31,23 +31,56 @@ const v3InvalidFieldCases: Array<[string, V3Mutation]> = [
   ["evidence uppercase contentHash", (value) => {
     value.evidence.contentHash = "A".repeat(64);
   }],
+  ["evidence contentHash with wrong length", (value) => {
+    value.evidence.contentHash = "a".repeat(63);
+  }],
   ["evidence wrong repositoryId prefix", (value) => {
     value.evidence.repositoryId = `file:${"a".repeat(64)}`;
+  }],
+  ["evidence repositoryId with wrong hash length", (value) => {
+    value.evidence.repositoryId = `repo:${"a".repeat(63)}`;
+  }],
+  ["evidence repositoryId with uppercase hex", (value) => {
+    value.evidence.repositoryId = `repo:${"A".repeat(64)}`;
   }],
   ["evidence wrong fileId prefix", (value) => {
     value.evidence.fileId = `stmt:${"b".repeat(64)}`;
   }],
+  ["evidence fileId with wrong hash length", (value) => {
+    value.evidence.fileId = `file:${"b".repeat(65)}`;
+  }],
+  ["evidence fileId with uppercase hex", (value) => {
+    value.evidence.fileId = `file:${"B".repeat(64)}`;
+  }],
   ["evidence wrong statementId prefix", (value) => {
     value.evidence.statementId = `repo:${"c".repeat(64)}`;
   }],
+  ["evidence statementId with wrong hash length", (value) => {
+    value.evidence.statementId = `stmt:${"c".repeat(63)}`;
+  }],
+  ["evidence statementId with uppercase hex", (value) => {
+    value.evidence.statementId = `stmt:${"C".repeat(64)}`;
+  }],
   ["evidence invalid gitCommit", (value) => {
     value.evidence.gitCommit = "abc";
+  }],
+  ["evidence gitCommit with uppercase hex", (value) => {
+    value.evidence.gitCommit = "A".repeat(40);
+  }],
+  ["evidence negative startByte", (value) => {
+    value.evidence.span.startByte = -1;
   }],
   ["evidence zero-based startLine", (value) => {
     value.evidence.span.startLine = 0;
   }],
   ["evidence zero-based startColumn", (value) => {
     value.evidence.span.startColumn = 0;
+  }],
+  ["evidence zero-based endLine", (value) => {
+    value.evidence.span.endLine = 0;
+  }],
+  ["evidence zero-based endColumn", (value) => {
+    value.evidence.span.endColumn = 0;
   }],
   ["evidence endByte equal to startByte", (value) => {
     value.evidence.span.endByte = value.evidence.span.startByte;
@@ -80,6 +113,21 @@ const v3InvalidFieldCases: Array<[string, V3Mutation]> = [
   }],
   ["semantics unknown field", (value) => {
     (value.entities[0].semantics as unknown as Record<string, unknown>).inferredFromName = true;
+  }],
+  ["event unknown field", (value) => {
+    (value as unknown as Record<string, unknown>).debug = true;
+  }],
+  ["entity unknown field", (value) => {
+    (value.entities[0] as unknown as Record<string, unknown>).metadata = {};
+  }],
+  ["relation unknown field", (value) => {
+    (value.relations[0] as unknown as Record<string, unknown>).confidence = 1;
+  }],
+  ["relation source reference unknown field", (value) => {
+    (value.relations[0].source as unknown as Record<string, unknown>).entityId = "external";
+  }],
+  ["relation target reference unknown field", (value) => {
+    (value.relations[0].target as unknown as Record<string, unknown>).entityId = "external";
   }],
   ["unknown category", (value) => {
     (value as unknown as { category: string }).category = "UNSUPPORTED_LINEAGE";
@@ -244,7 +292,25 @@ describe("extractEventsFromChunk", () => {
     expect(llm.extractEventsFromChunk).not.toHaveBeenCalled();
   });
 
-  it("rejects v3 relation endpoints outside the event entity closure", async () => {
+  it("rejects an unknown structured SAG event schema without calling the LLM", async () => {
+    const envelope = validLineageV3Envelope();
+    const llm = rejectingLlm();
+    (envelope as unknown as { schema: string }).schema = "snw.sql_lineage_event.v999";
+
+    await expect(extractEventsFromChunk(structuredChunkInput(envelope, llm)))
+      .rejects.toThrow("Invalid structured SAG event");
+    expect(llm.extractEventsFromChunk).not.toHaveBeenCalled();
+  });
+
+  it("rejects v3 relation source endpoints outside the event entity closure", async () => {
+    const envelope = validLineageV3Envelope();
+    envelope.relations[0].source.name = "warehouse.missing_source";
+
+    await expect(extractEventsFromChunk(structuredChunkInput(envelope, rejectingLlm())))
+      .rejects.toThrow("undeclared entity");
+  });
+
+  it("rejects v3 relation target endpoints outside the event entity closure", async () => {
     const envelope = validLineageV3Envelope();
     envelope.relations[0].target.name = "warehouse.missing_target";
 
@@ -258,6 +324,14 @@ describe("extractEventsFromChunk", () => {
 
     await expect(extractEventsFromChunk(structuredChunkInput(envelope, rejectingLlm())))
       .rejects.toThrow("contextTask references undeclared entity");
+  });
+
+  it("rejects a v3 TABLE_DATA_FLOW relation when its required contextTask is missing", async () => {
+    const envelope = validLineageV3Envelope({ category: "TABLE_DATA_FLOW" });
+    delete envelope.relations[0].contextTask;
+
+    await expect(extractEventsFromChunk(structuredChunkInput(envelope, rejectingLlm())))
+      .rejects.toThrow("relation DATA_FLOW requires contextTask");
   });
 
   it("rejects v3 relations whose endpoint types violate the relation shape", async () => {

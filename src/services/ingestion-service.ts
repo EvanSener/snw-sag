@@ -74,14 +74,6 @@ export class IngestionService {
       message: "正在解析文档内容",
       progress: 8
     });
-    const source = await createSource({
-      id: input.sourceId,
-      tenantId,
-      name: input.title,
-      description: "Created by SAG ingestDocument",
-      metadata: { ...(input.metadata ?? {}), traceId, chunking: chunkingOptions }
-    });
-
     const chunking = chunkMarkdown(input.content, chunkingOptions);
     onProgress?.({
       stage: "CHUNKING",
@@ -112,6 +104,13 @@ export class IngestionService {
     const client = await pool.connect();
     try {
       await client.query("begin");
+      const source = await createSource({
+        id: input.sourceId,
+        tenantId,
+        name: input.title,
+        description: "Created by SAG ingestDocument",
+        metadata: { ...(input.metadata ?? {}), traceId, chunking: chunkingOptions }
+      }, client);
       await client.query(
         `
           insert into documents (id, source_id, title, content, status, parse_status, metadata)
@@ -201,7 +200,7 @@ export class IngestionService {
             preparedEvent.event.priority ?? "UNKNOWN",
             preparedEvent.event.status ?? "COMPLETED",
             preparedEvent.event.references,
-            JSON.stringify({ traceId }),
+            JSON.stringify(eventMetadata(preparedEvent.event, traceId)),
             toVectorLiteral(preparedEvent.titleEmbedding),
             toVectorLiteral(preparedEvent.contentEmbedding)
           ]
@@ -211,13 +210,14 @@ export class IngestionService {
         for (const entity of preparedEvent.entities) {
           const key = entityKey(entity.type, entity.name);
           let savedId = persistedEntityIds.get(key);
-          if (!savedId) {
+          if (!savedId || preparedEvent.event.schema === "snw.sql_lineage_event.v3") {
             const saved = await upsertEntity({
               sourceId: source.id,
               type: entity.type,
               name: entity.name,
               description: entity.description,
-              embedding: entity.entityEmbedding
+              embedding: entity.entityEmbedding,
+              metadata: entityMetadata(preparedEvent.event, entity)
             }, client);
             savedId = saved.id;
             persistedEntityIds.set(key, savedId);
@@ -440,6 +440,23 @@ export class IngestionService {
 }
 
 export const ingestionService = new IngestionService();
+
+function eventMetadata(event: ExtractedEvent, traceId: string): Record<string, unknown> {
+  return event.schema === "snw.sql_lineage_event.v3"
+    ? { traceId, sqlLineageEvidence: event.evidence }
+    : { traceId };
+}
+
+function entityMetadata(event: ExtractedEvent, entity: ExtractedEntity): Record<string, unknown> {
+  return event.schema === "snw.sql_lineage_event.v3" && entity.semantics
+    ? {
+        lineageSemantics: {
+          role: entity.semantics.role,
+          sourceSchema: event.schema
+        }
+      }
+    : {};
+}
 
 function entityKey(type: string, name: string): string {
   return `${type}\u0000${name.trim().toLowerCase()}`;

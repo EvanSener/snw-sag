@@ -26,6 +26,13 @@ import type {
 
 type Queryable = Pick<pg.Pool | pg.PoolClient, "query">;
 
+export class LineageSemanticsConflictError extends Error {
+  constructor(entityType: string, entityName: string) {
+    super(`Conflicting lineage semantics for ${entityType}:${entityName}`);
+    this.name = "LineageSemanticsConflictError";
+  }
+}
+
 function db(client?: Queryable): Queryable {
   return client ?? pool;
 }
@@ -359,20 +366,27 @@ export async function upsertEntity(input: {
   name: string;
   description?: string;
   embedding: number[];
+  metadata?: Record<string, unknown>;
 }, client?: Queryable): Promise<EntityRecord> {
   const normalizedName = input.name.trim().toLowerCase();
   const entityTypeId = (await getDefaultEntityType(input.type, client)) ?? await getAnyDefaultEntityType(client);
   const result = await db(client).query(
     `
       insert into entities (
-        id, source_id, entity_type_id, type, name, normalized_name, description, embedding
+        id, source_id, entity_type_id, type, name, normalized_name, description, embedding, metadata
       )
-      values ($1, $2, $3, $4, $5, $6, $7, $8::vector)
+      values ($1, $2, $3, $4, $5, $6, $7, $8::vector, $9::jsonb)
       on conflict (source_id, type, normalized_name) do update set
         name = excluded.name,
         description = coalesce(nullif(entities.description, ''), excluded.description),
         embedding = coalesce(entities.embedding, excluded.embedding),
+        metadata = entities.metadata || excluded.metadata,
         updated_at = now()
+      where not (
+        excluded.metadata ? 'lineageSemantics'
+        and entities.metadata ? 'lineageSemantics'
+        and entities.metadata->'lineageSemantics' <> excluded.metadata->'lineageSemantics'
+      )
       returning *
     `,
     [
@@ -383,10 +397,15 @@ export async function upsertEntity(input: {
       input.name,
       normalizedName,
       input.description ?? "",
-      toVectorLiteral(input.embedding)
+      toVectorLiteral(input.embedding),
+      JSON.stringify(input.metadata ?? {})
     ]
   );
-  return entityFromRow(result.rows[0]);
+  const row = result.rows[0];
+  if (!row) {
+    throw new LineageSemanticsConflictError(input.type, input.name);
+  }
+  return entityFromRow(row);
 }
 
 export async function searchEntitiesByVector(input: {

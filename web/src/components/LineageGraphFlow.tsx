@@ -48,19 +48,24 @@ import {
   LineageCanvasNodeView,
   type LineageFlowNode
 } from "./lineage-graph/LineageCanvasNodes.js";
+import { OrthogonalLineageEdge } from "./lineage-graph/OrthogonalLineageEdge.js";
 import {
   GraphIconButton,
   LineageExplorerPanel,
   LineageInspectorPanel,
   type LineageInspectorRelation
 } from "./lineage-graph/LineageWorkbenchPanels.js";
-import { layoutLineageCanvas } from "./lineage-graph/layout.js";
+import {
+  layoutLineageCanvas,
+  type RoutedLineageCanvasEdge
+} from "./lineage-graph/layout.js";
 import {
   ENTITY_COLORS,
   RELATION_COLORS,
   text
 } from "./lineage-graph/palette.js";
 import { loadLineageTraversal } from "./lineage-graph/traversal-loader.js";
+import { collapseLineageGraph } from "./lineage-graph/collapse-model.js";
 
 const MAX_VISIBLE_NODES = 500;
 const MAX_TRAVERSAL_REQUESTS = 40;
@@ -68,6 +73,7 @@ const DEFAULT_TRAVERSAL_DEPTH = 1;
 const MAX_COLLAPSED_COLUMNS = 6;
 const MAX_EXPANDED_COLUMNS = 18;
 const NODE_TYPES = { lineage: LineageCanvasNodeView };
+const EDGE_TYPES = { orthogonal: OrthogonalLineageEdge };
 
 const DEFAULT_ENTITY_VISIBILITY: Record<LineageEntityType, boolean> = {
   task: true,
@@ -83,7 +89,7 @@ const DEFAULT_RELATION_VISIBILITY: Record<LineageRelationKind, boolean> = {
   "column-column": true
 };
 
-type LineageFlowEdgeData = LineageCanvasEdge & Record<string, unknown>;
+type LineageFlowEdgeData = RoutedLineageCanvasEdge & Record<string, unknown>;
 type LineageFlowEdge = Edge<LineageFlowEdgeData>;
 
 export function LineageGraphFlow(props: {
@@ -114,6 +120,8 @@ function LineageGraphWorkbench(props: {
   const [loadingNodeIds, setLoadingNodeIds] = useState<Set<string>>(new Set());
   const [expandedNodeIds, setExpandedNodeIds] = useState<Set<string>>(new Set());
   const [expandedTableIds, setExpandedTableIds] = useState<Set<string>>(new Set());
+  const [collapsedUpstreamNodeIds, setCollapsedUpstreamNodeIds] = useState<Set<string>>(new Set());
+  const [collapsedDownstreamNodeIds, setCollapsedDownstreamNodeIds] = useState<Set<string>>(new Set());
   const [isSearching, setIsSearching] = useState(false);
   const [layoutPending, setLayoutPending] = useState(false);
   const [message, setMessage] = useState("");
@@ -124,6 +132,8 @@ function LineageGraphWorkbench(props: {
   const [showRelationLabels, setShowRelationLabels] = useState(false);
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [positions, setPositions] = useState<Map<string, { x: number; y: number }>>(new Map());
+  const [routedCanvasEdges, setRoutedCanvasEdges] = useState<RoutedLineageCanvasEdge[]>([]);
+  const [bundledEdgeIds, setBundledEdgeIds] = useState<string[]>([]);
   const traversalRunRef = useRef(0);
   const layoutRunRef = useRef(0);
   const { fitView } = useReactFlow<LineageFlowNode, LineageFlowEdge>();
@@ -143,18 +153,25 @@ function LineageGraphWorkbench(props: {
     }),
     [visibleEntityTypes, visibleGraph, visibleRelationKinds]
   );
+  const collapsedGraph = useMemo(
+    () => collapseLineageGraph(filteredGraph, {
+      upstreamNodeIds: collapsedUpstreamNodeIds,
+      downstreamNodeIds: collapsedDownstreamNodeIds
+    }),
+    [collapsedDownstreamNodeIds, collapsedUpstreamNodeIds, filteredGraph]
+  );
   const nodeTypes = useMemo(
     () => new Map(visibleGraph.nodes.map((node) => [node.id, node.type])),
     [visibleGraph.nodes]
   );
   const selectedNeighborhood = useMemo(
     () => selectedNodeId
-      ? collectLineageNeighborhood(filteredGraph, selectedNodeId, traversalDepth)
+      ? collectLineageNeighborhood(collapsedGraph, selectedNodeId, traversalDepth)
       : null,
-    [filteredGraph, selectedNodeId, traversalDepth]
+    [collapsedGraph, selectedNodeId, traversalDepth]
   );
   const visibleCanvasModel = useMemo(
-    () => buildLineageCanvasModel(filteredGraph, {
+    () => buildLineageCanvasModel(collapsedGraph, {
       expandedTableIds,
       maxCollapsedColumns: MAX_COLLAPSED_COLUMNS,
       maxExpandedColumns: MAX_EXPANDED_COLUMNS,
@@ -163,7 +180,7 @@ function LineageGraphWorkbench(props: {
       showRelationLabels,
       language: props.language
     }),
-    [expandedTableIds, filteredGraph, props.language, selectedNeighborhood, selectedNodeId, showRelationLabels]
+    [collapsedGraph, expandedTableIds, props.language, selectedNeighborhood, selectedNodeId, showRelationLabels]
   );
   const displayedCanvasNodes = useMemo(
     () => selectedNeighborhood
@@ -198,6 +215,8 @@ function LineageGraphWorkbench(props: {
     setVisibleGraph(graph);
     setExpandedNodeIds(new Set());
     setExpandedTableIds(new Set());
+    setCollapsedUpstreamNodeIds(new Set());
+    setCollapsedDownstreamNodeIds(new Set());
     setLoadingNodeIds(new Set());
     setSelectedNodeId(null);
     setTraversalDepth(DEFAULT_TRAVERSAL_DEPTH);
@@ -210,9 +229,13 @@ function LineageGraphWorkbench(props: {
     const runId = layoutRunRef.current + 1;
     layoutRunRef.current = runId;
     setLayoutPending(true);
+    setRoutedCanvasEdges([]);
+    setBundledEdgeIds([]);
     void layoutLineageCanvas(displayedCanvasNodes, displayedCanvasEdges).then((result) => {
       if (layoutRunRef.current !== runId) return;
       setPositions(new Map(result.nodes.map((node) => [node.id, node.position])));
+      setRoutedCanvasEdges(result.edges);
+      setBundledEdgeIds(result.bundledEdgeIds);
       setLayoutPending(false);
       if (result.degraded) {
         setMessage(text(
@@ -300,6 +323,16 @@ function LineageGraphWorkbench(props: {
     });
   }, []);
 
+  const toggleDirection = useCallback((nodeId: string, direction: "upstream" | "downstream") => {
+    const setState = direction === "upstream" ? setCollapsedUpstreamNodeIds : setCollapsedDownstreamNodeIds;
+    setState((current) => {
+      const next = new Set(current);
+      if (next.has(nodeId)) next.delete(nodeId);
+      else next.add(nodeId);
+      return next;
+    });
+  }, []);
+
   const flowNodes = useMemo<LineageFlowNode[]>(
     () => displayedCanvasNodes.map((node, index) => ({
       id: node.id,
@@ -311,16 +344,19 @@ function LineageGraphWorkbench(props: {
           || node.columns.some((column) => loadingNodeIds.has(column.id)),
         language: props.language,
         onSelectEntity: selectEntity,
-        onToggleTable: toggleTable
+        onToggleTable: toggleTable,
+        upstreamCollapsed: collapsedUpstreamNodeIds.has(node.entityId),
+        downstreamCollapsed: collapsedDownstreamNodeIds.has(node.entityId),
+        onToggleDirection: toggleDirection
       },
       style: { width: node.width, height: node.height },
-      draggable: true,
+      draggable: false,
       selectable: true
     })),
-    [displayedCanvasNodes, loadingNodeIds, positions, props.language, selectEntity, toggleTable]
+    [collapsedDownstreamNodeIds, collapsedUpstreamNodeIds, displayedCanvasNodes, loadingNodeIds, positions, props.language, selectEntity, toggleDirection, toggleTable]
   );
   const flowEdges = useMemo<LineageFlowEdge[]>(
-    () => displayedCanvasEdges.map((edge) => {
+    () => routedCanvasEdges.map((edge) => {
       const color = RELATION_COLORS[edge.relationKind];
       return {
         id: edge.id,
@@ -328,7 +364,7 @@ function LineageGraphWorkbench(props: {
         target: edge.target,
         sourceHandle: edge.sourceHandle,
         targetHandle: edge.targetHandle,
-        type: "smoothstep",
+        type: "orthogonal",
         data: { ...edge },
         label: edge.showLabel ? edge.label : undefined,
         labelStyle: { fill: "#334155", fontSize: 10, fontWeight: 600 },
@@ -349,7 +385,7 @@ function LineageGraphWorkbench(props: {
         selectable: true
       };
     }),
-    [displayedCanvasEdges, selectedNeighborhood]
+    [routedCanvasEdges, selectedNeighborhood]
   );
 
   const inspectorRelations = useMemo(
@@ -394,6 +430,8 @@ function LineageGraphWorkbench(props: {
       setVisibleGraph(page);
       setExpandedNodeIds(new Set());
       setExpandedTableIds(new Set());
+      setCollapsedUpstreamNodeIds(new Set());
+      setCollapsedDownstreamNodeIds(new Set());
       setSelectedNodeId(null);
       setTraversalDepth(DEFAULT_TRAVERSAL_DEPTH);
       setMessage(page.nodes.length === 0
@@ -415,6 +453,8 @@ function LineageGraphWorkbench(props: {
     setVisibleGraph(graph);
     setExpandedNodeIds(new Set());
     setExpandedTableIds(new Set());
+    setCollapsedUpstreamNodeIds(new Set());
+    setCollapsedDownstreamNodeIds(new Set());
     setLoadingNodeIds(new Set());
     setSelectedNodeId(null);
     setTraversalDepth(DEFAULT_TRAVERSAL_DEPTH);
@@ -427,6 +467,8 @@ function LineageGraphWorkbench(props: {
     setEntityVisibility(DEFAULT_ENTITY_VISIBILITY);
     setRelationVisibility(DEFAULT_RELATION_VISIBILITY);
     setShowRelationLabels(false);
+    setCollapsedUpstreamNodeIds(new Set());
+    setCollapsedDownstreamNodeIds(new Set());
     setTraversalDepth(DEFAULT_TRAVERSAL_DEPTH);
     if (selectedNodeId) void traverseNode(selectedNodeId, DEFAULT_TRAVERSAL_DEPTH);
   }
@@ -486,6 +528,7 @@ function LineageGraphWorkbench(props: {
           nodes={flowNodes}
           edges={flowEdges}
           nodeTypes={NODE_TYPES}
+          edgeTypes={EDGE_TYPES}
           onNodeClick={onNodeClick}
           onNodeDoubleClick={(event, node) => {
             event.stopPropagation();
@@ -498,7 +541,7 @@ function LineageGraphWorkbench(props: {
           minZoom={0.08}
           maxZoom={2.2}
           nodesConnectable={false}
-          nodesDraggable
+          nodesDraggable={false}
           elementsSelectable
           proOptions={{ hideAttribution: true }}
         >
@@ -550,7 +593,13 @@ function LineageGraphWorkbench(props: {
             {layoutPending ? <Loader2 className="h-3.5 w-3.5 animate-spin text-sky-700" /> : null}
             <span className="tabular-nums">{displayedCanvasNodes.length} {text(props.language, "节点", "nodes")}</span>
             <span className="text-slate-300">/</span>
-            <span className="tabular-nums">{displayedCanvasEdges.length} {text(props.language, "关系", "relations")}</span>
+            <span className="tabular-nums">{flowEdges.length} {text(props.language, "可见关系", "visible relations")}</span>
+            {bundledEdgeIds.length > 0 ? (
+              <>
+                <span className="text-slate-300">/</span>
+                <span className="tabular-nums text-amber-700">{bundledEdgeIds.length} {text(props.language, "证据束", "bundled")}</span>
+              </>
+            ) : null}
           </div>
         </div>
 

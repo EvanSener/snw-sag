@@ -1,6 +1,8 @@
 import { memo } from "react";
 import {
   ChevronDown,
+  ChevronLeft,
+  ChevronRight,
   ChevronUp,
   Columns3,
   Database,
@@ -27,6 +29,9 @@ export interface LineageFlowNodeData extends LineageCanvasNode {
   language: SupportedLanguage;
   onSelectEntity: (entityId: string) => void;
   onToggleTable: (tableId: string) => void;
+  upstreamCollapsed: boolean;
+  downstreamCollapsed: boolean;
+  onToggleDirection: (entityId: string, direction: "upstream" | "downstream") => void;
 }
 
 export type LineageFlowNode = Node<LineageFlowNodeData, "lineage">;
@@ -175,7 +180,7 @@ function NodeShell(props: {
       data-testid={`lineage-node-${props.data.kind}`}
       data-entity-id={props.data.entityId}
       className={cn(
-        "h-full w-full overflow-hidden rounded-md border bg-white shadow-[0_1px_2px_rgba(15,23,42,0.08)] transition-[border-color,box-shadow,opacity]",
+        "relative h-full w-full overflow-hidden rounded-md border bg-white shadow-[0_1px_2px_rgba(15,23,42,0.08)] transition-[border-color,box-shadow,opacity]",
         props.data.selected
           ? "border-slate-900 shadow-[0_0_0_2px_rgba(15,23,42,0.12),0_8px_20px_rgba(15,23,42,0.12)]"
           : "border-slate-300",
@@ -183,6 +188,40 @@ function NodeShell(props: {
       )}
       style={{ borderLeftColor: props.accent, borderLeftWidth: 3 }}
     >
+      <div className="nodrag nopan absolute right-1 top-1 z-10 flex gap-0.5">
+        <button
+          type="button"
+          data-testid="lineage-collapse-upstream"
+          aria-pressed={props.data.upstreamCollapsed}
+          title={text(props.data.language, "折叠/展开上游", "Collapse/expand upstream")}
+          className={cn(
+            "flex h-5 w-5 items-center justify-center rounded border border-slate-200 bg-white/95 text-slate-500 hover:text-slate-900",
+            props.data.upstreamCollapsed && "border-sky-400 bg-sky-50 text-sky-700"
+          )}
+          onClick={(event) => {
+            event.stopPropagation();
+            props.data.onToggleDirection(props.data.entityId, "upstream");
+          }}
+        >
+          <ChevronLeft className="h-3 w-3" />
+        </button>
+        <button
+          type="button"
+          data-testid="lineage-collapse-downstream"
+          aria-pressed={props.data.downstreamCollapsed}
+          title={text(props.data.language, "折叠/展开下游", "Collapse/expand downstream")}
+          className={cn(
+            "flex h-5 w-5 items-center justify-center rounded border border-slate-200 bg-white/95 text-slate-500 hover:text-slate-900",
+            props.data.downstreamCollapsed && "border-sky-400 bg-sky-50 text-sky-700"
+          )}
+          onClick={(event) => {
+            event.stopPropagation();
+            props.data.onToggleDirection(props.data.entityId, "downstream");
+          }}
+        >
+          <ChevronRight className="h-3 w-3" />
+        </button>
+      </div>
       {props.children}
     </div>
   );

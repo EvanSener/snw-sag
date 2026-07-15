@@ -5,6 +5,10 @@ import type {
   ElkNode
 } from "elkjs/lib/elk-api.js";
 import type { LineageCanvasEdge, LineageCanvasNode } from "./canvas-model.js";
+import {
+  partitionNonCrossingEdges,
+  type GeometryPoint
+} from "./geometry-audit.js";
 
 const ElkConstructor = ELKModule as unknown as new(args?: ELKConstructorArguments) => ElkInstance;
 const defaultEngine = new ElkConstructor();
@@ -13,8 +17,16 @@ export interface PositionedLineageCanvasNode extends LineageCanvasNode {
   position: { x: number; y: number };
 }
 
+export type LineageLayoutPoint = GeometryPoint;
+
+export interface RoutedLineageCanvasEdge extends LineageCanvasEdge {
+  points: LineageLayoutPoint[];
+}
+
 export interface LineageLayoutResult {
   nodes: PositionedLineageCanvasNode[];
+  edges: RoutedLineageCanvasEdge[];
+  bundledEdgeIds: string[];
   degraded: boolean;
   error?: string;
 }
@@ -28,7 +40,7 @@ export async function layoutLineageCanvas(
   edges: LineageCanvasEdge[],
   engine: LineageLayoutEngine = defaultEngine
 ): Promise<LineageLayoutResult> {
-  if (nodes.length === 0) return { nodes: [], degraded: false };
+  if (nodes.length === 0) return { nodes: [], edges: [], bundledEdgeIds: [], degraded: false };
   try {
     const graph = await engine.layout({
       id: "lineage-root",
@@ -41,6 +53,7 @@ export async function layoutLineageCanvas(
         "elk.layered.spacing.nodeNodeBetweenLayers": "140",
         "elk.layered.spacing.edgeNodeBetweenLayers": "36",
         "elk.layered.nodePlacement.strategy": "NETWORK_SIMPLEX",
+        "elk.layered.crossingMinimization.strategy": "LAYER_SWEEP",
         "elk.layered.considerModelOrder.strategy": "NODES_AND_EDGES"
       },
       children: nodes.map((node) => ({ id: node.id, width: node.width, height: node.height })),
@@ -53,17 +66,89 @@ export async function layoutLineageCanvas(
     if (positionById.size !== nodes.length) {
       throw new Error("ELK returned an incomplete layout");
     }
+    const positionedNodes = nodes.map((node) => ({ ...node, position: positionById.get(node.id)! }));
+    const elkEdgeById = new Map((graph.edges ?? []).map((edge) => [edge.id, edge]));
+    const routedEdges = edges.map((edge) => ({
+      ...edge,
+      points: edgePoints(elkEdgeById.get(edge.id)?.sections)
+    }));
+    const fallbackPointsById = new Map(routeFallbackEdges(edges, positionedNodes).map((edge) => [edge.id, edge.points]));
+    for (const edge of routedEdges) {
+      if (edge.points.length < 2) edge.points = fallbackPointsById.get(edge.id) ?? [];
+    }
+    const audited = partitionNonCrossingEdges(routedEdges);
     return {
-      nodes: nodes.map((node) => ({ ...node, position: positionById.get(node.id)! })),
+      nodes: positionedNodes,
+      edges: audited.edges,
+      bundledEdgeIds: audited.bundledEdgeIds,
       degraded: false
     };
   } catch (error) {
+    const positionedNodes = fallbackLayout(nodes, edges);
+    const audited = partitionNonCrossingEdges(routeFallbackEdges(edges, positionedNodes));
     return {
-      nodes: fallbackLayout(nodes, edges),
+      nodes: positionedNodes,
+      edges: audited.edges,
+      bundledEdgeIds: audited.bundledEdgeIds,
       degraded: true,
       error: error instanceof Error ? error.message : String(error)
     };
   }
+}
+
+function edgePoints(
+  sections: Array<{
+    startPoint: LineageLayoutPoint;
+    bendPoints?: LineageLayoutPoint[];
+    endPoint: LineageLayoutPoint;
+  }> | undefined
+): LineageLayoutPoint[] {
+  const points: LineageLayoutPoint[] = [];
+  for (const section of sections ?? []) {
+    for (const point of [section.startPoint, ...(section.bendPoints ?? []), section.endPoint]) {
+      const previous = points[points.length - 1];
+      if (!previous || previous.x !== point.x || previous.y !== point.y) points.push({ x: point.x, y: point.y });
+    }
+  }
+  return points;
+}
+
+function routeFallbackEdges(
+  edges: LineageCanvasEdge[],
+  nodes: PositionedLineageCanvasNode[]
+): RoutedLineageCanvasEdge[] {
+  const nodeById = new Map(nodes.map((node) => [node.id, node]));
+  return edges.map((edge) => {
+    const source = nodeById.get(edge.source);
+    const target = nodeById.get(edge.target);
+    if (!source || !target) return { ...edge, points: [] };
+    const start = {
+      x: source.position.x + source.width,
+      y: source.position.y + source.height / 2
+    };
+    const end = {
+      x: target.position.x,
+      y: target.position.y + target.height / 2
+    };
+    const middleX = start.x <= end.x
+      ? (start.x + end.x) / 2
+      : Math.max(start.x, end.x + target.width) + 60;
+    return {
+      ...edge,
+      points: deduplicatePoints([
+        start,
+        { x: middleX, y: start.y },
+        { x: middleX, y: end.y },
+        end
+      ])
+    };
+  });
+}
+
+function deduplicatePoints(points: LineageLayoutPoint[]): LineageLayoutPoint[] {
+  return points.filter((point, index) => (
+    index === 0 || point.x !== points[index - 1].x || point.y !== points[index - 1].y
+  ));
 }
 
 function fallbackLayout(

@@ -1,4 +1,9 @@
 import { z } from "zod";
+import {
+  lineageSemanticsSchema,
+  sqlLineageEvidenceSchema,
+  type LineageRole
+} from "../../lineage/contracts.js";
 import type { ExtractedEntity, ExtractedEvent, ExtractedRelation } from "../../types.js";
 
 const structuredEventMarker = /```sag-event\b/;
@@ -9,6 +14,13 @@ const structuredEntitySchema = z.object({
   type: z.enum(["task", "table", "column"]),
   name: nonEmptyString,
   description: nonEmptyString
+}).strict();
+
+const structuredEntityV3Schema = z.object({
+  type: z.enum(["task", "table", "column"]),
+  name: nonEmptyString,
+  description: nonEmptyString,
+  semantics: lineageSemanticsSchema
 }).strict();
 
 const eventFields = {
@@ -60,9 +72,27 @@ const structuredEventV2Schema = z.object({
   relations: z.array(structuredRelationSchema).min(1)
 }).strict();
 
+const lineageCategorySchema = z.enum([
+  "TASK_PRODUCES_TABLE",
+  "TABLE_DATA_FLOW",
+  "SQL_TABLE_JOIN",
+  "TABLE_TO_COLUMN_LINEAGE",
+  "COLUMN_TO_COLUMN_LINEAGE"
+]);
+
+const structuredEventV3Schema = z.object({
+  schema: z.literal("snw.sql_lineage_event.v3"),
+  ...eventFields,
+  category: lineageCategorySchema,
+  evidence: sqlLineageEvidenceSchema,
+  entities: z.array(structuredEntityV3Schema).min(1),
+  relations: z.array(structuredRelationSchema).min(1)
+}).strict();
+
 const structuredEventEnvelopeSchema = z.discriminatedUnion("schema", [
   structuredEventV1Schema,
-  structuredEventV2Schema
+  structuredEventV2Schema,
+  structuredEventV3Schema
 ]);
 
 export function parseStructuredEvent(rawContent: string, references: string[]): ExtractedEvent | null {
@@ -91,24 +121,47 @@ export function parseStructuredEvent(rawContent: string, references: string[]): 
     throw invalidStructuredEvent(details);
   }
 
+  if (result.data.schema === "snw.sql_lineage_event.v3") {
+    validateEntitySemanticsConsistency(result.data.entities);
+  }
+
   const entities = dedupeEntities(result.data.entities);
-  if (result.data.schema === "snw.sql_lineage_event.v2") {
+  if (
+    result.data.schema === "snw.sql_lineage_event.v2"
+    || result.data.schema === "snw.sql_lineage_event.v3"
+  ) {
     validateRelations(entities, result.data.relations);
-    const { schema: _schema, relations, ...event } = result.data;
     return {
-      ...event,
+      ...result.data,
       references,
       entities,
-      relations: dedupeRelations(relations)
+      relations: dedupeRelations(result.data.relations)
     };
   }
 
-  const { schema: _schema, ...event } = result.data;
   return {
-    ...event,
+    ...result.data,
     references,
     entities
   };
+}
+
+function validateEntitySemanticsConsistency(entities: ExtractedEntity[]): void {
+  const roles = new Map<string, LineageRole>();
+  for (const entity of entities) {
+    const role = entity.semantics?.role;
+    if (!role) {
+      throw invalidStructuredEvent(`entity ${entity.type}:${entity.name} is missing semantics`);
+    }
+    const key = entityKey(entity.type, entity.name);
+    const existingRole = roles.get(key);
+    if (existingRole && existingRole !== role) {
+      throw invalidStructuredEvent(
+        `entity ${entity.type}:${entity.name} has conflicting semantics roles ${existingRole} and ${role}`
+      );
+    }
+    roles.set(key, role);
+  }
 }
 
 function dedupeEntities(entities: ExtractedEntity[]): ExtractedEntity[] {

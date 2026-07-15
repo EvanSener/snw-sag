@@ -1,3 +1,9 @@
+import type {
+  LineageSemantics,
+  SqlLineageEventSchema,
+  SqlLineageEvidence
+} from "./lineage/contracts.js";
+
 export type SearchStrategy = "vector" | "multi";
 export type SearchMode = "standard" | "fast";
 export type MultiSubStrategy = "multi" | "multi1" | "hopllm";
@@ -188,6 +194,7 @@ export interface IngestProgressUpdate {
 }
 
 export interface ExtractedEvent {
+  schema?: SqlLineageEventSchema;
   title: string;
   summary: string;
   content: string;
@@ -198,12 +205,14 @@ export interface ExtractedEvent {
   references: string[];
   entities: ExtractedEntity[];
   relations?: ExtractedRelation[];
+  evidence?: SqlLineageEvidence;
 }
 
 export interface ExtractedEntity {
   type: string;
   name: string;
   description: string;
+  semantics?: LineageSemantics;
 }
 
 export interface ExtractedEntityRef {

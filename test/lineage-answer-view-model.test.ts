@@ -4,6 +4,8 @@ import {
   EVIDENCE_PATH_FIXTURE,
   TRAVERSAL_PAGES
 } from "../web/src/fixtures/lineage-workbench-fixture.js";
+import { buildAnswerViewModel } from "../web/src/components/lineage-graph/answer-view-model.js";
+import { EvidencePathCache } from "../web/src/components/lineage-graph/evidence-path-cache.js";
 import { api } from "../web/src/lib/api.js";
 
 afterEach(() => {
@@ -97,6 +99,83 @@ describe("answer-safe lineage workbench fixture", () => {
       "table:dwd.order_fact",
       "table:ads.order_mart"
     ]);
+  });
+
+  it("creates safe evidence capsules and keeps metric layers separate", () => {
+    const model = buildAnswerViewModel(ANSWER_GRAPH_FIXTURE);
+
+    expect(model.capsules).toEqual([
+      expect.objectContaining({
+        id: "evidence:sagpath:orders-to-mart",
+        pathId: "sagpath:orders-to-mart",
+        label: "2 个隐藏步骤 · 3 条证据",
+        hiddenNodeCount: 2,
+        evidenceCount: 3
+      })
+    ]);
+    expect(model.metrics).toEqual(ANSWER_GRAPH_FIXTURE.stats);
+    expect(model.metrics).not.toBe(ANSWER_GRAPH_FIXTURE.stats);
+
+    const sensitiveNames = EVIDENCE_PATH_FIXTURE.nodes
+      .filter((node) => node.role !== "business")
+      .map((node) => node.name);
+    for (const name of sensitiveNames) {
+      expect(JSON.stringify(model.capsules)).not.toContain(name);
+    }
+  });
+
+  it("rejects an evidence graph as the answer workbench model", () => {
+    expect(() => buildAnswerViewModel({
+      ...ANSWER_GRAPH_FIXTURE,
+      view: "evidence"
+    })).toThrow("Lineage workbench requires view=answer");
+  });
+
+  it("isolates evidence path details by project, revision, and path", () => {
+    const cache = new EvidencePathCache();
+    cache.set("project-a", EVIDENCE_PATH_FIXTURE.graphRevision, EVIDENCE_PATH_FIXTURE);
+
+    expect(cache.get(
+      "project-a",
+      EVIDENCE_PATH_FIXTURE.graphRevision,
+      EVIDENCE_PATH_FIXTURE.pathId
+    )).toBe(EVIDENCE_PATH_FIXTURE);
+    expect(cache.get("project-a", "sagrev:other", EVIDENCE_PATH_FIXTURE.pathId)).toBeUndefined();
+    expect(cache.get(
+      "project-b",
+      EVIDENCE_PATH_FIXTURE.graphRevision,
+      EVIDENCE_PATH_FIXTURE.pathId
+    )).toBeUndefined();
+    expect(cache.get(
+      "project-a",
+      EVIDENCE_PATH_FIXTURE.graphRevision,
+      "sagpath:other"
+    )).toBeUndefined();
+  });
+
+  it("clears only the selected project's evidence cache", () => {
+    const cache = new EvidencePathCache();
+    cache.set("project-a", EVIDENCE_PATH_FIXTURE.graphRevision, EVIDENCE_PATH_FIXTURE);
+    cache.set("project-b", EVIDENCE_PATH_FIXTURE.graphRevision, EVIDENCE_PATH_FIXTURE);
+
+    cache.clearProject("project-a");
+
+    expect(cache.get(
+      "project-a",
+      EVIDENCE_PATH_FIXTURE.graphRevision,
+      EVIDENCE_PATH_FIXTURE.pathId
+    )).toBeUndefined();
+    expect(cache.get(
+      "project-b",
+      EVIDENCE_PATH_FIXTURE.graphRevision,
+      EVIDENCE_PATH_FIXTURE.pathId
+    )).toBe(EVIDENCE_PATH_FIXTURE);
+  });
+
+  it("rejects evidence detail stored under a different revision", () => {
+    const cache = new EvidencePathCache();
+    expect(() => cache.set("project-a", "sagrev:other", EVIDENCE_PATH_FIXTURE))
+      .toThrow("Evidence path revision does not match the cache key");
   });
 });
 

@@ -81,3 +81,91 @@ export type SqlLineageEventSchema =
   | "snw.sql_lineage_event.v1"
   | "snw.sql_lineage_event.v2"
   | "snw.sql_lineage_event.v3";
+
+export type LineageView = "answer" | "evidence";
+export type LineageDirection = "upstream" | "downstream" | "both";
+
+export interface LineageEvidenceEvent {
+  id: string;
+  title: string;
+  summary: string;
+  relativePath: string;
+  statementId: string;
+}
+
+export interface LineageGraphNodeRecord {
+  id: string;
+  sourceId: string;
+  type: "task" | "table" | "column";
+  name: string;
+  normalizedName: string;
+  relationCount: number;
+}
+
+export interface LineageGraphEdgeRecord {
+  id: string;
+  sourceId: string;
+  targetId: string;
+  type: string;
+  contextTaskId?: string | null;
+  contextTaskName?: string | null;
+  eventId?: string | null;
+  evidenceCount: number;
+}
+
+export interface LineageEvidenceNode extends LineageGraphNodeRecord {
+  role: LineageRole;
+  roleSource: "declared" | "legacy-default";
+}
+
+export interface LineageEvidenceEdge extends LineageGraphEdgeRecord {
+  eventIds: string[];
+  events: LineageEvidenceEvent[];
+}
+
+export interface LineageEvidenceSnapshot {
+  tenantId: string;
+  projectId: string;
+  available: boolean;
+  graphRevision: string;
+  nodes: LineageEvidenceNode[];
+  edges: LineageEvidenceEdge[];
+}
+
+export interface EvidencePathSummary {
+  pathId: string;
+  sourceNodeId: string | null;
+  targetNodeId: string | null;
+  hiddenNodeCount: number;
+  relationTypes: string[];
+  evidenceCount: number;
+  eventIds: string[];
+}
+
+export interface LineageGraphStats {
+  evidenceLoadedNodes: number;
+  evidenceLoadedEdges: number;
+  answerNodes: number;
+  answerEdges: number;
+  semanticHiddenNodes: number;
+  semanticHiddenEdges: number;
+}
+
+export interface LineageEvidencePathDetail {
+  pathId: string;
+  graphRevision: string;
+  nodes: Array<LineageGraphNodeRecord & { role: LineageRole; order: number }>;
+  edges: Array<LineageGraphEdgeRecord & { order: number; eventIds: string[] }>;
+  events: LineageEvidenceEvent[];
+}
+
+export interface LineageGraphRecord {
+  available: boolean;
+  view: LineageView;
+  graphRevision: string;
+  nodes: LineageGraphNodeRecord[];
+  edges: LineageGraphEdgeRecord[];
+  evidencePathSummaries: EvidencePathSummary[];
+  stats: LineageGraphStats;
+  hasMore: boolean;
+}

@@ -22,9 +22,11 @@ describe.each([
     });
 
     expect(response.statusCode).toBe(500);
-    expect(response.json()).toMatchObject({
+    expect(response.body).not.toContain("只支持上传 .md 和 .txt 文档");
+    expect(response.json()).toEqual({
       error: {
-        message: "只支持上传 .md 和 .txt 文档"
+        code: "INTERNAL_ERROR",
+        message: "服务暂时不可用"
       }
     });
   });

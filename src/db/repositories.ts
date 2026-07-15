@@ -16,7 +16,7 @@ import type {
   McpMessageRole,
   McpSessionRecord,
   McpToolCallRecord,
-  LineageGraphRecord,
+  LegacyLineageGraphRecord,
   ProjectGraphEntityRecord,
   ProjectGraphEventRecord,
   ProjectGraphRecord,
@@ -1116,7 +1116,7 @@ export async function getLineageGraphPage(input: {
   nodeId?: string;
   query?: string;
   limit: number;
-}): Promise<LineageGraphRecord> {
+}): Promise<LegacyLineageGraphRecord> {
   const requestedLimit = Math.max(1, input.limit);
   if (input.query?.trim()) {
     const result = await pool.query(

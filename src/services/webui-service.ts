@@ -10,7 +10,6 @@ import {
   getEntityDetail,
   getDocumentDetail,
   getEventDetail,
-  getLineageGraphPage,
   getProjectGraph,
   getProjectStats,
   listChunksByDocument,
@@ -23,10 +22,23 @@ import {
   updateDocument,
   updateSource
 } from "../db/repositories.js";
+import { getLineageEvidenceSnapshot } from "../db/lineage-repository.js";
 import { ingestionService } from "./ingestion-service.js";
 import type { ChunkingMode, IngestProgressStage, IngestProgressUpdate } from "../types.js";
+import type { LineageDirection, LineageView } from "../lineage/contracts.js";
+import { LineageService } from "./lineage-service.js";
 
 const ALLOWED_EXTENSIONS = new Set([".md", ".txt"]);
+
+const lineageService = new LineageService({
+  getEvidenceSnapshot: ({ tenantId, projectId }) => getLineageEvidenceSnapshot({
+    tenantId,
+    sourceId: projectId
+  }),
+  getRevision: async ({ tenantId, projectId }) => (
+    await getLineageEvidenceSnapshot({ tenantId, sourceId: projectId })
+  )?.graphRevision ?? null
+});
 
 type UploadJobStatus = "QUEUED" | "RUNNING" | "COMPLETED" | "FAILED";
 
@@ -307,10 +319,24 @@ export class WebuiService {
 
   async getLineageGraph(
     projectId: string,
-    input: { nodeId?: string; query?: string; limit: number },
+    input: {
+      view?: LineageView;
+      direction?: LineageDirection;
+      nodeId?: string;
+      query?: string;
+      limit: number;
+    },
     tenantId = config.DEFAULT_TENANT_ID
   ) {
-    return getLineageGraphPage({ sourceId: projectId, tenantId, ...input });
+    return lineageService.getGraph({ projectId, tenantId, ...input });
+  }
+
+  async getLineageEvidencePath(
+    projectId: string,
+    pathId: string,
+    tenantId = config.DEFAULT_TENANT_ID
+  ) {
+    return lineageService.getEvidencePath({ projectId, tenantId, pathId });
   }
 
   async updateDocument(documentId: string, input: { title?: string }, tenantId = config.DEFAULT_TENANT_ID) {

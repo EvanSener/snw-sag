@@ -1,7 +1,17 @@
 import type {
+  LineageGraphRecord as AnswerLineageGraphRecord,
   LineageSemantics,
   SqlLineageEventSchema,
   SqlLineageEvidence
+} from "./lineage/contracts.js";
+export type {
+  EvidencePathSummary,
+  LineageEvidencePathDetail,
+  LineageGraphEdgeRecord,
+  LineageGraphNodeRecord,
+  LineageGraphRecord,
+  LineageGraphStats,
+  LineageView
 } from "./lineage/contracts.js";
 
 export type SearchStrategy = "vector" | "multi";
@@ -121,32 +131,10 @@ export interface ProjectGraphRecord {
   }>;
 }
 
-export interface LineageGraphNodeRecord {
-  id: string;
-  sourceId: string;
-  type: "task" | "table" | "column";
-  name: string;
-  normalizedName: string;
-  relationCount: number;
-}
-
-export interface LineageGraphEdgeRecord {
-  id: string;
-  sourceId: string;
-  targetId: string;
-  type: string;
-  contextTaskId?: string | null;
-  contextTaskName?: string | null;
-  eventId?: string | null;
-  evidenceCount: number;
-}
-
-export interface LineageGraphRecord {
-  available: boolean;
-  nodes: LineageGraphNodeRecord[];
-  edges: LineageGraphEdgeRecord[];
-  hasMore: boolean;
-}
+export type LegacyLineageGraphRecord = Pick<
+  AnswerLineageGraphRecord,
+  "available" | "nodes" | "edges" | "hasMore"
+>;
 
 export interface IngestDocumentInput {
   sourceId?: string;

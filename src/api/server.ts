@@ -14,6 +14,7 @@ import { mcpAgentService } from "../services/mcp-agent-service.js";
 import { aiSettingsService } from "../services/ai-settings-service.js";
 import { getPublicMcpSettings } from "../services/mcp-settings-service.js";
 import { listModelCallLogs } from "../observability/model-call-log.js";
+import { LineageError } from "../lineage/errors.js";
 
 const rootDir = process.cwd();
 const webDistDir = path.join(rootDir, "web", "dist");
@@ -70,10 +71,12 @@ const uploadSchema = z.object({
 });
 
 const lineageGraphQuerySchema = z.object({
+  view: z.enum(["answer", "evidence"]).default("answer"),
+  direction: z.enum(["upstream", "downstream", "both"]).optional(),
   nodeId: z.string().uuid().optional(),
   query: z.string().trim().min(1).max(200).optional(),
   limit: z.coerce.number().int().min(1).max(200).default(100)
-}).refine((value) => !(value.nodeId && value.query), {
+}).strict().refine((value) => !(value.nodeId && value.query), {
   message: "nodeId and query cannot be used together"
 });
 
@@ -121,6 +124,7 @@ const aiSettingsSchema = z.object({
 
 export function buildHttpServer() {
   const app = Fastify({
+    routerOptions: { maxParamLength: 256 },
     logger: {
       level: config.LOG_LEVEL,
       base: {
@@ -264,6 +268,15 @@ export function buildHttpServer() {
     };
   });
 
+  app.get("/api/projects/:projectId/lineage-evidence-paths/:pathId", async (request) => {
+    const params = request.params as { projectId: string; pathId: string };
+    z.string().uuid().parse(params.projectId);
+    z.string().min(1).parse(params.pathId);
+    return {
+      path: await webuiService.getLineageEvidencePath(params.projectId, params.pathId)
+    };
+  });
+
   app.post("/api/documents/upload", { bodyLimit: MAX_UPLOAD_BODY_BYTES }, async (request, reply) => {
     const input = uploadSchema.parse(request.body);
     const result = await webuiService.uploadDocument(input);
@@ -402,9 +415,10 @@ export function buildHttpServer() {
         result
       });
     } catch (error) {
+      const publicError = getPublicError(error);
       send("error", {
         type: "error",
-        message: getErrorMessage(error)
+        ...publicError
       });
     } finally {
       reply.raw.end();
@@ -553,9 +567,10 @@ export function buildHttpServer() {
       });
     } catch (error) {
       if (!isAbortError(error)) {
+        const publicError = getPublicError(error);
         send("error", {
           type: "error",
-          message: getErrorMessage(error)
+          ...publicError
         });
       }
     } finally {
@@ -582,7 +597,12 @@ export function buildHttpServer() {
   }
 
   app.setErrorHandler((error, _request, reply) => {
-    const statusCode = error instanceof z.ZodError ? 400 : 500;
+    const statusCode = error instanceof LineageError
+      ? error.statusCode
+      : error instanceof z.ZodError
+        ? 400
+        : 500;
+    const publicError = getPublicError(error);
     const logPayload = { error, statusCode };
     if (statusCode >= 500) {
       logger.error(logPayload, "request failed");
@@ -590,10 +610,7 @@ export function buildHttpServer() {
       logger.warn(logPayload, "request validation failed");
     }
     reply.code(statusCode).send({
-      error: {
-        code: statusCode === 400 ? "BAD_REQUEST" : "INTERNAL_ERROR",
-        message: getErrorMessage(error)
-      }
+      error: publicError
     });
   });
 
@@ -609,11 +626,14 @@ function notFound(code: string, message: string) {
   };
 }
 
-function getErrorMessage(error: unknown): string {
-  if (error instanceof z.ZodError) {
-    return "请求参数无效";
+function getPublicError(error: unknown): { code: string; message: string } {
+  if (error instanceof LineageError) {
+    return { code: error.code, message: error.message };
   }
-  return error instanceof Error ? error.message : String(error);
+  if (error instanceof z.ZodError) {
+    return { code: "BAD_REQUEST", message: "请求参数无效" };
+  }
+  return { code: "INTERNAL_ERROR", message: "服务暂时不可用" };
 }
 
 function isAbortError(error: unknown): boolean {

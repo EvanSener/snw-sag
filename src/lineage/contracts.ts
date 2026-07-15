@@ -2,6 +2,11 @@ import { z } from "zod";
 
 const sha256Pattern = /^[0-9a-f]{64}$/;
 const gitCommitPattern = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
+const windowsDrivePathPattern = /^[a-zA-Z]:\//;
+const controlCharacterPattern = /[\u0000-\u001f\u007f]/u;
+
+const nonNegativeSafeInteger = z.number().int().safe().min(0);
+const positiveSafeInteger = z.number().int().safe().positive();
 
 function prefixedSha256Schema(prefix: "repo" | "file" | "stmt") {
   return z.string().regex(new RegExp(`^${prefix}:[0-9a-f]{64}$`));
@@ -16,12 +21,12 @@ export const lineageSemanticsSchema = z.object({
 export type LineageSemantics = z.infer<typeof lineageSemanticsSchema>;
 
 export const sourceSpanSchema = z.object({
-  startByte: z.number().int().min(0),
-  endByte: z.number().int().positive(),
-  startLine: z.number().int().positive(),
-  startColumn: z.number().int().positive(),
-  endLine: z.number().int().positive(),
-  endColumn: z.number().int().positive()
+  startByte: nonNegativeSafeInteger,
+  endByte: positiveSafeInteger,
+  startLine: positiveSafeInteger,
+  startColumn: positiveSafeInteger,
+  endLine: positiveSafeInteger,
+  endColumn: positiveSafeInteger
 }).strict().superRefine((span, context) => {
   if (span.endByte <= span.startByte) {
     context.addIssue({
@@ -51,7 +56,15 @@ export const sqlLineageEvidenceSchema = z.object({
     const segments = value.split("/");
     return !value.startsWith("/")
       && !value.includes("\\")
-      && segments.every((segment) => segment.length > 0 && segment !== "." && segment !== "..");
+      && !windowsDrivePathPattern.test(value)
+      && !controlCharacterPattern.test(value)
+      && value === value.trim()
+      && segments.every((segment) => (
+        segment.length > 0
+        && segment === segment.trim()
+        && segment !== "."
+        && segment !== ".."
+      ));
   }, "relativePath must be a normalized POSIX repository-relative path"),
   contentHash: z.string().regex(sha256Pattern),
   gitCommit: z.union([

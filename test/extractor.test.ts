@@ -28,6 +28,21 @@ const v3InvalidFieldCases: Array<[string, V3Mutation]> = [
   ["evidence dot relativePath segment", (value) => {
     value.evidence.relativePath = "daily/./a.sql";
   }],
+  ["evidence Windows drive relativePath", (value) => {
+    value.evidence.relativePath = "C:/repo/a.sql";
+  }],
+  ["evidence NUL relativePath", (value) => {
+    value.evidence.relativePath = "daily/a\0.sql";
+  }],
+  ["evidence newline relativePath", (value) => {
+    value.evidence.relativePath = "daily/a\n.sql";
+  }],
+  ["evidence whitespace-only relativePath", (value) => {
+    value.evidence.relativePath = "   ";
+  }],
+  ["evidence padded relativePath", (value) => {
+    value.evidence.relativePath = " daily/a.sql ";
+  }],
   ["evidence uppercase contentHash", (value) => {
     value.evidence.contentHash = "A".repeat(64);
   }],
@@ -81,6 +96,27 @@ const v3InvalidFieldCases: Array<[string, V3Mutation]> = [
   }],
   ["evidence zero-based endColumn", (value) => {
     value.evidence.span.endColumn = 0;
+  }],
+  ["evidence unsafe startByte", (value) => {
+    value.evidence.span.startByte = Number.MAX_SAFE_INTEGER + 1;
+    value.evidence.span.endByte = Number.MAX_SAFE_INTEGER + 3;
+  }],
+  ["evidence unsafe endByte", (value) => {
+    value.evidence.span.endByte = Number.MAX_SAFE_INTEGER + 1;
+  }],
+  ["evidence unsafe startLine", (value) => {
+    value.evidence.span.startLine = Number.MAX_SAFE_INTEGER + 1;
+    value.evidence.span.endLine = Number.MAX_SAFE_INTEGER + 1;
+  }],
+  ["evidence unsafe startColumn", (value) => {
+    value.evidence.span.startColumn = Number.MAX_SAFE_INTEGER + 1;
+    value.evidence.span.endColumn = Number.MAX_SAFE_INTEGER + 1;
+  }],
+  ["evidence unsafe endLine", (value) => {
+    value.evidence.span.endLine = Number.MAX_SAFE_INTEGER + 1;
+  }],
+  ["evidence unsafe endColumn", (value) => {
+    value.evidence.span.endColumn = Number.MAX_SAFE_INTEGER + 1;
   }],
   ["evidence endByte equal to startByte", (value) => {
     value.evidence.span.endByte = value.evidence.span.startByte;

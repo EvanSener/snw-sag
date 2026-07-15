@@ -123,11 +123,11 @@ export const api = {
   async getLineageEvidencePath(
     projectId: string,
     pathId: string,
-    options: { signal?: AbortSignal } = {}
+    signal?: AbortSignal
   ) {
     return request<{ path: LineageEvidencePathDetail }>(
       `/api/projects/${projectId}/lineage-evidence-paths/${encodeURIComponent(pathId)}`,
-      { signal: options.signal }
+      { signal }
     );
   },
 

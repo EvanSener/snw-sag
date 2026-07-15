@@ -14,6 +14,7 @@ describe("answer-safe lineage workbench fixture", () => {
   it("keeps the answer graph free of hidden entity names", () => {
     expect(ANSWER_GRAPH_FIXTURE.view).toBe("answer");
     const serialized = JSON.stringify(ANSWER_GRAPH_FIXTURE);
+    expect(serialized).not.toMatch(/tmp|temp/i);
     expect(serialized).not.toContain("stage.tmp_order_clean");
     expect(serialized).not.toContain("stage.order_enriched");
   });
@@ -139,7 +140,7 @@ describe("lineage answer and evidence API", () => {
     await api.getLineageEvidencePath(
       "project-1",
       "sagpath:orders/to mart?revision=1",
-      { signal: controller.signal }
+      controller.signal
     );
 
     expect(fetchMock).toHaveBeenCalledWith(
@@ -155,7 +156,7 @@ describe("lineage answer and evidence API", () => {
     await expect(api.getLineageEvidencePath(
       "project-1",
       "sagpath:orders-to-mart",
-      { signal: new AbortController().signal }
+      new AbortController().signal
     )).rejects.toBe(abortError);
   });
 });
